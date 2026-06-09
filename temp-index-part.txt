@@ -1,0 +1,1200 @@
+﻿import { Ionicons } from '@expo/vector-icons';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSQLiteContext } from 'expo-sqlite';
+import { type Href, useFocusEffect, useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
+
+import { AppShell } from '../../src/components/app-shell';
+import { DateField } from '../../src/components/date-field';
+import { EmptyState } from '../../src/components/empty-state';
+import { listEntityLinks, listEntityTags, sensitiveEntityKinds } from '../../src/db/cross-repositories';
+import {
+  ensureSubstance,
+  listConcerts,
+  listCountries,
+  listDoses,
+  listGames,
+  listIdeas,
+  listPhysicalActivities,
+  listSleepEntries,
+  listSubstances,
+  saveDose,
+  saveIdea,
+} from '../../src/db/module-repositories';
+import {
+  createChecklist,
+  listBooks,
+  listChecklists,
+  listJournalEntries,
+  listNotes,
+  listObjectives,
+  listPeople,
+  listProjects,
+  listReminders,
+  listRoutines,
+  listTemplates,
+  listTreatments,
+  listTimelineEntries,
+  markReminderDone,
+  saveJournalEntry,
+  saveNote,
+  saveObjective,
+  saveReminder,
+  saveTimelineEntry,
+} from '../../src/db/repositories';
+import type {
+  Book,
+  ChecklistSummary,
+  Concert,
+  Country,
+  Dose,
+  EntityLink,
+  EntityTag,
+  Game,
+  Idea,
+  HomeModuleId,
+  HomeWidgetId,
+  JournalEntry,
+  Note,
+  Objective,
+  Person,
+  PhysicalActivity,
+  Project,
+  Reminder,
+  Routine,
+  SleepEntry,
+  Substance,
+  Template,
+  Treatment,
+  TimelineEntry,
+} from '../../src/db/types';
+import { buildReminderPresets } from '../../src/lib/date';
+import { sensitiveHomeModuleIds } from '../../src/lib/personalization';
+import { useTheme, useThemePreferences } from '../../src/theme/theme-provider';
+import { fonts, radii, spacing } from '../../src/theme/tokens';
+import { getInterpolatedMoodColor } from '../../src/theme/score-colors';
+import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, type RecordingStatus } from 'expo-audio';
+import { Directory, File, Paths } from 'expo-file-system';
+import { saveEntityAttachment } from '../../src/db/cross-repositories';
+
+type SearchResult = {
+  id: string;
+  title: string;
+  subtitle: string;
+  href: Href;
+  action?: {
+    label: string;
+    kind: 'doneReminder';
+    id: string;
+  };
+};
+
+type SearchScope = 'all' | 'notes' | 'people' | 'agenda' | 'health' | 'tags';
+
+type QuickAction = {
+  id: HomeModuleId;
+  title: string;
+  body: string;
+  eyebrow: string;
+  href: Href;
+  variant: 'hero' | 'wide' | 'tall' | 'compact';
+  tone: 'accent' | 'sun' | 'primary' | 'neutral';
+  value: string;
+};
+
+type ContextWidget = {
+  id: HomeWidgetId;
+  icon: string;
+  title: string;
+  body: string;
+  actionLabel: string;
+  href: Href;
+  visible: boolean;
+};
+
+type WeeklyReviewItem = {
+  label: string;
+  value: string;
+  detail: string;
+  href: Href;
+  color?: string;
+};
+
+type QuickCaptureKind = 'note' | 'rappel' | 'idee' | 'liste' | 'journal' | 'objectif' | 'moment' | 'prise';
+
+const reviewRangeOptions = [
+  { label: '7j', value: 7 },
+  { label: '15j', value: 15 },
+  { label: '30j', value: 30 },
+  { label: '90j', value: 90 },
+  { label: '180j', value: 180 },
+  { label: '360j', value: 360 },
+] as const;
+
+type ReviewRangeMode = (typeof reviewRangeOptions)[number]['value'] | 'custom';
+
+const quickCaptureOptions: Array<{ id: QuickCaptureKind; label: string; sensitive?: boolean }> = [
+  { id: 'note', label: 'Note' },
+  { id: 'rappel', label: 'Rappel' },
+  { id: 'idee', label: 'IdÃ©e' },
+  { id: 'liste', label: 'Liste' },
+  { id: 'journal', label: 'Journal' },
+  { id: 'objectif', label: 'Objectif' },
+  { id: 'moment', label: 'Moment' },
+  { id: 'prise', label: 'Prise', sensitive: true },
+];
+
+const searchScopeOptions: Array<{ id: SearchScope; label: string }> = [
+  { id: 'all', label: 'Tout' },
+  { id: 'notes', label: 'Notes' },
+  { id: 'people', label: 'Cercle' },
+  { id: 'agenda', label: 'Agenda' },
+  { id: 'health', label: 'SantÃ©' },
+  { id: 'tags', label: 'Tags' },
+];
+
+const hitSlop = { top: 8, right: 8, bottom: 8, left: 8 } as const;
+
+function buildQuickActionRows(actions: QuickAction[]) {
+  const rows: QuickAction[][] = [];
+
+  actions.forEach((action) => {
+    const fullWidth = action.variant === 'hero' || action.variant === 'wide';
+    const previousRow = rows[rows.length - 1];
+
+    if (fullWidth || !previousRow || previousRow.length === 2 || previousRow.some((item) => item.variant === 'hero' || item.variant === 'wide')) {
+      rows.push([action]);
+      return;
+    }
+
+    previousRow.push(action);
+  });
+
+  return rows;
+}
+
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    weekday: 'long',
+  });
+}
+
+function formatTimeLabel(value: string) {
+  return new Date(value).toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatDayLabel(value: string) {
+  return new Date(value).toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+function localDay(value = new Date()) {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function parseDay(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+
+  return date;
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function buildDayRange(startKey: string, endKey: string) {
+  const startDate = parseDay(startKey);
+  const endDate = parseDay(endKey);
+
+  if (!startDate || !endDate) {
+    return [];
+  }
+
+  const firstDate = startDate.getTime() <= endDate.getTime() ? startDate : endDate;
+  const lastDate = startDate.getTime() <= endDate.getTime() ? endDate : startDate;
+  const days: string[] = [];
+  const cursor = new Date(firstDate);
+
+  while (cursor.getTime() <= lastDate.getTime()) {
+    days.push(localDay(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return days;
+}
+
+function getNextBirthday(person: Person) {
+  if (!person.birthday) {
+    return null;
+  }
+
+  const [year, month, day] = person.birthday.split('-').map(Number);
+  if (!month || !day) {
+    return null;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let nextBirthday = new Date(today.getFullYear(), month - 1, day, 12, 0, 0, 0);
+  if (nextBirthday.getTime() < today.getTime()) {
+    nextBirthday = new Date(today.getFullYear() + 1, month - 1, day, 12, 0, 0, 0);
+  }
+
+  return {
+    person,
+    date: nextBirthday,
+    age: year && year > 1900 ? nextBirthday.getFullYear() - year : null,
+  };
+}
+
+function getGreeting(now: Date) {
+  const hour = now.getHours();
+
+  if (hour < 6) {
+    return 'Bonne nuit';
+  }
+
+  if (hour < 12) {
+    return 'Bonjour';
+  }
+
+  if (hour < 18) {
+    return 'Bon aprÃ¨s-midi';
+  }
+
+  return 'Bonsoir';
+}
+
+function includesQuery(value: string, query: string) {
+  return value.toLowerCase().includes(query);
+}
+
+function getFirstLine(value: string) {
+  return value.split('\n')[0]?.trim() || value.trim();
+}
+
+export default function HomeScreen() {
+  const db = useSQLiteContext();
+  const router = useRouter();
+  const { colors } = useTheme();
+  const { preferences } = useThemePreferences();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const [allNotes, setAllNotes] = useState<Note[]>([]);
+  const [checklists, setChecklists] = useState<ChecklistSummary[]>([]);
+  const [latestNotes, setLatestNotes] = useState<Note[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [books, setBooks] = useState<Book[]>([]);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [doses, setDoses] = useState<Dose[]>([]);
+  const [sleepEntries, setSleepEntries] = useState<SleepEntry[]>([]);
+  const [activities, setActivities] = useState<PhysicalActivity[]>([]);
+  const [entityLinks, setEntityLinks] = useState<EntityLink[]>([]);
+  const [entityTags, setEntityTags] = useState<EntityTag[]>([]);
+  const [substances, setSubstances] = useState<Substance[]>([]);
+  const [games, setGames] = useState<Game[]>([]);
+  const [countries, setCountries] = useState<Country[]>([]);
+  const [concerts, setConcerts] = useState<Concert[]>([]);
+  const [treatments, setTreatments] = useState<Treatment[]>([]);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [objectives, setObjectives] = useState<Objective[]>([]);
+  const [timelineEntries, setTimelineEntries] = useState<TimelineEntry[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchScope, setSearchScope] = useState<SearchScope>('all');
+  const [quickCaptureKind, setQuickCaptureKind] = useState<QuickCaptureKind>('note');
+  const [quickCaptureText, setQuickCaptureText] = useState('');
+  const [quickCaptureFeedback, setQuickCaptureFeedback] = useState<string | null>(null);
+  const [quickCaptureBusy, setQuickCaptureBusy] = useState(false);
+  const [recordingStatus, setRecordingStatus] = useState<RecordingStatus | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY, setRecordingStatus);
+  const audioRecordingNow = recordingStatus?.isRecording ?? false;
+  const audioDurationSec = recordingStatus?.currentTime ? Math.floor(recordingStatus.currentTime / 1000) : 0;
+  
+  const defaultReviewStart = useMemo(() => localDay(addDays(new Date(), -6)), []);
+  const defaultReviewEnd = useMemo(() => localDay(), []);
+  const [reviewRangeMode, setReviewRangeMode] = useState<ReviewRangeMode>(7);
+  const [customReviewStart, setCustomReviewStart] = useState(defaultReviewStart);
+  const [customReviewEnd, setCustomReviewEnd] = useState(defaultReviewEnd);
+  const quickCaptureInputRef = useRef<TextInput | null>(null);
+  const friseHref = '/frise' as Href;
+  const objectifsHref = '/objectifs' as Href;
+  const treatmentHref = '/traitement' as Href;
+  const journalHref = '/journal' as Href;
+
+  const refresh = useCallback(() => {
+    let active = true;
+
+    void (async () => {
+      const [
+        nextLists,
+        nextNotes,
+        nextPeople,
+        nextProjects,
+        nextReminders,
+        nextRoutines,
+        nextTemplates,
+        nextBooks,
+        nextIdeas,
+        nextDoses,
+        nextSleepEntries,
+        nextActivities,
+        nextEntityLinks,
+        nextEntityTags,
+        nextSubstances,
+        nextGames,
+        nextCountries,
+        nextConcerts,
+        nextTreatments,
+        nextJournalEntries,
+        nextObjectives,
+        nextTimelineEntries,
+      ] = await Promise.all([
+        listChecklists(db),
+        listNotes(db),
+        listPeople(db),
+        listProjects(db),
+        listReminders(db),
+        listRoutines(db),
+        listTemplates(db),
+        listBooks(db),
+        listIdeas(db),
+        listDoses(db),
+        listSleepEntries(db),
+        listPhysicalActivities(db),
+        listEntityLinks(db),
+        listEntityTags(db),
+        listSubstances(db),
+        listGames(db),
+        listCountries(db),
+        listConcerts(db),
+        listTreatments(db),
+        listJournalEntries(db),
+        listObjectives(db),
+        listTimelineEntries(db),
+      ]);
+
+      if (!active) {
+        return;
+      }
+
+      setAllNotes(nextNotes);
+      setChecklists(nextLists);
+      setBooks(nextBooks);
+      setLatestNotes(nextNotes.slice(0, 2));
+      setPeople(nextPeople);
+      setProjects(nextProjects);
+      setReminders(nextReminders);
+      setRoutines(nextRoutines);
+      setTemplates(nextTemplates);
+      setIdeas(nextIdeas);
+      setDoses(nextDoses);
+      setSleepEntries(nextSleepEntries);
+      setActivities(nextActivities);
+      setEntityLinks(nextEntityLinks);
+      setEntityTags(nextEntityTags);
+      setSubstances(nextSubstances);
+      setGames(nextGames);
+      setCountries(nextCountries);
+      setConcerts(nextConcerts);
+      setTreatments(nextTreatments);
+      setJournalEntries(nextJournalEntries);
+      setObjectives(nextObjectives);
+      setTimelineEntries(nextTimelineEntries);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [db]);
+
+  useFocusEffect(refresh);
+
+  const handleQuickCapture = async () => {
+    const text = quickCaptureText.trim();
+    if (!text || quickCaptureBusy) {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+      return;
+    }
+
+    setQuickCaptureBusy(true);
+    setQuickCaptureFeedback(null);
+
+    try {
+      if (quickCaptureKind === 'note') {
+        await saveNote(db, {
+          title: getFirstLine(text) || 'Note rapide',
+          body: text,
+          tags: ['capture'],
+        });
+        setQuickCaptureFeedback('Note ajoutÃ©e.');
+      } else if (quickCaptureKind === 'rappel') {
+        const tomorrowMorning = buildReminderPresets()[2].date;
+        await saveReminder(db, {
+          title: text,
+          scheduledFor: tomorrowMorning.toISOString(),
+          notificationId: null,
+          category: 'rappel',
+        });
+        setQuickCaptureFeedback('Rappel crÃ©Ã© pour demain matin.');
+      } else if (quickCaptureKind === 'idee') {
+        await saveIdea(db, {
+          text,
+          status: 'explorer',
+          tags: ['capture'],
+        });
+        setQuickCaptureFeedback('IdÃ©e ajoutÃ©e au pipeline.');
+      } else if (quickCaptureKind === 'liste') {
+        const created = await createChecklist(db, { name: getFirstLine(text) });
+        if (created) {
+          router.push({ pathname: '/listes', params: { listId: created.id } });
+        }
+        setQuickCaptureFeedback('Liste crÃ©Ã©e.');
+      } else if (quickCaptureKind === 'journal') {
+        await saveJournalEntry(db, {
+          date: localDay(),
+          mood: 3,
+          text,
+        });
+        setQuickCaptureFeedback('EntrÃ©e du jour enregistrÃ©e.');
+      } else if (quickCaptureKind === 'objectif') {
+        await saveObjective(db, {
+          title: getFirstLine(text),
+          scope: 'perso',
+          deadline: '',
+          progress: 0,
+        });
+        setQuickCaptureFeedback('Objectif crÃ©Ã©.');
+      } else if (quickCaptureKind === 'moment') {
+        await saveTimelineEntry(db, {
+          date: localDay(),
+          title: getFirstLine(text),
+          note: text.includes('\n') ? text.split('\n').slice(1).join('\n').trim() : '',
+        });
+        setQuickCaptureFeedback('Moment ajoutÃ© Ã  la frise.');
+      } else if (quickCaptureKind === 'prise' && preferences.showSensitiveContent) {
+        const substance = getFirstLine(text);
+        await ensureSubstance(db, { name: substance, category: 'autre', firstTried: localDay() });
+        await saveDose(db, {
+          substance,
+          datetime: new Date().toISOString(),
+          notes: text,
+          contextTags: ['capture'],
+        });
+        setQuickCaptureFeedback('Prise ajoutÃ©e au journal.');
+      }
+
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      setQuickCaptureText('');
+      void refresh();
+    } catch (error) {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      setQuickCaptureFeedback(error instanceof Error ? error.message : 'Capture impossible pour le moment.');
+    } finally {
+      setQuickCaptureBusy(false);
+    }
+  };
+
+  const handleQuickCaptureDictation = async () => {
+    if (audioRecordingNow) {
+      setQuickCaptureBusy(true);
+      await recorder.stop();
+      if (recorder.uri) {
+        try {
+          const attachmentsDirectory = new Directory(Paths.document, 'attachments');
+          attachmentsDirectory.create({ idempotent: true, intermediates: true });
+          const attachmentId = `att-${Date.now()}`;
+          const targetFile = new File(attachmentsDirectory, `${attachmentId}-memo.m4a`);
+          const sourceFile = new File(recorder.uri);
+          await sourceFile.move(targetFile);
+
+          const created = await saveNote(db, {
+            title: `MÃ©mo vocal du ${new Date().toLocaleDateString('fr-FR')} Ã  ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`,
+            body: quickCaptureText || '',
+            tags: ['vocal', 'capture'],
+          });
+          
+          if (created) {
+             await saveEntityAttachment(db, {
+               id: attachmentId,
+               entityKind: 'note',
+               entityId: created.id,
+               name: 'Memo vocal',
+               mimeType: 'audio/mp4',
+               fileUri: targetFile.uri,
+               size: targetFile.size ?? 0,
+             });
+          }
+          setQuickCaptureFeedback('MÃ©mo vocal sauvegardÃ© dans une note.');
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+          setQuickCaptureText('');
+          void refresh();
+        } catch (error) {
+          setQuickCaptureFeedback('Erreur lors de la sauvegarde du mÃ©mo.');
+          console.error(error);
+        } finally {
+          setQuickCaptureBusy(false);
+        }
+      }
+    } else {
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) {
+        setQuickCaptureFeedback('Permission micro requise.');
+        return;
+      }
+      
+      try {
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        setQuickCaptureFeedback('Enregistrement en cours... Touche Ã  nouveau pour sauvegarder.');
+      } catch {
+        setQuickCaptureFeedback('Impossible de dÃ©marrer le micro.');
+      }
+    }
+  };
+
+  const now = new Date();
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  const oneWeekFromNow = new Date(endOfToday.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const dueReminders = reminders.filter(
+    (reminder) =>
+      reminder.status === 'scheduled' && new Date(reminder.scheduledFor).getTime() <= endOfToday.getTime(),
+  );
+  const upcomingReminders = reminders.filter((reminder) => {
+    if (reminder.status !== 'scheduled') {
+      return false;
+    }
+
+    const targetTime = new Date(reminder.scheduledFor).getTime();
+    return targetTime > endOfToday.getTime() && targetTime <= oneWeekFromNow.getTime();
+  });
+
+  const enabledRoutines = routines.filter((routine) => routine.enabled);
+  const openLists = checklists.filter((list) => list.itemCount > list.doneCount);
+  const totalPendingItems = checklists.reduce(
+    (sum, list) => sum + Math.max(0, list.itemCount - list.doneCount),
+    0,
+  );
+  const visibleEntityTags = preferences.showSensitiveContent
+    ? entityTags
+    : entityTags.filter((entry) => !sensitiveEntityKinds.includes(entry.entityKind));
+  const totalTags = new Set([
+    ...allNotes.flatMap((note) => note.tags),
+    ...projects.flatMap((project) => project.tags),
+    ...ideas.flatMap((idea) => idea.tags),
+    ...visibleEntityTags.map((entry) => entry.tag),
+  ].map((tag) => tag.trim().toLowerCase()).filter(Boolean)).size;
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const rawSearchResults: SearchResult[] = trimmedQuery
+    ? [
+        ...allNotes.flatMap((note) =>
+          includesQuery(`${note.title} ${note.body} ${(note.tags || []).join(' ')}`, trimmedQuery)
+            ? [
+                {
+                  id: note.id,
+                  title: note.title,
+                  subtitle: 'Note',
+                  href: { pathname: '/notes' as const, params: { noteId: note.id } },
+                },
+              ]
+            : [],
+        ),
+        ...checklists.flatMap((list) =>
+          includesQuery(list.name, trimmedQuery)
+            ? [
+                {
+                  id: list.id,
+                  title: list.name,
+                  subtitle: 'Liste',
+                  href: { pathname: '/listes' as const, params: { listId: list.id } },
+                },
+              ]
+            : [],
+        ),
+        ...people.flatMap((person) =>
+          includesQuery(
+            `${person.name} ${person.note} ${person.phone} ${person.address} ${person.interests.join(' ')}`,
+            trimmedQuery,
+          )
+            ? [
+                {
+                  id: person.id,
+                  title: person.name,
+                  subtitle: 'Cercle',
+                  href: { pathname: '/cercle' as const, params: { personId: person.id } },
+                },
+              ]
+            : [],
+        ),
+        ...projects.flatMap((project) =>
+          includesQuery(
+            `${project.name} ${project.notes} ${project.tags.join(' ')}`,
+            trimmedQuery,
+          )
+            ? [
+                {
+                  id: project.id,
+                  title: project.name,
+                  subtitle: 'Projet pro',
+                  href: { pathname: '/pro' as const, params: { projectId: project.id } },
+                },
+              ]
+            : [],
+        ),
+        ...reminders.flatMap((reminder) =>
+          includesQuery(reminder.title, trimmedQuery)
+            ? [
+                {
+                  id: reminder.id,
+                  title: reminder.title,
+                  subtitle: 'Rappel',
+                  href: { pathname: '/rappels' as const, params: { reminderId: reminder.id } },
+                  action: reminder.status === 'scheduled' ? { label: 'Fait', kind: 'doneReminder' as const, id: reminder.id } : undefined,
+                },
+              ]
+            : [],
+        ),
+        ...enabledRoutines.flatMap((routine) =>
+          includesQuery(`${routine.label} ${routine.time}`, trimmedQuery)
+            ? [
+                {
+                  id: routine.key,
+                  title: routine.label,
+                  subtitle: 'Routine quotidienne',
+                  href: '/rappels' as const,
+                },
+              ]
+            : [],
+        ),
+        ...templates.flatMap((template) =>
+          includesQuery(`${template.name} ${template.body}`, trimmedQuery)
+            ? [
+                {
+                  id: template.id,
+                  title: template.name,
+                  subtitle: 'ModÃ¨le',
+                  href: { pathname: '/templates' as const, params: { templateId: template.id } },
+                },
+              ]
+            : [],
+        ),
+        ...journalEntries.flatMap((entry) =>
+          includesQuery(`${entry.date} ${entry.text}`, trimmedQuery)
+            ? [
+                {
+                  id: entry.date,
+                  title: entry.text || `Journal du ${formatDayLabel(`${entry.date}T12:00:00`)}`,
+                  subtitle: 'Journal',
+                  href: '/journal' as const,
+                },
+              ]
+            : [],
+        ),
+        ...objectives.flatMap((objective) =>
+          includesQuery(`${objective.title} ${objective.deadline} ${objective.scope}`, trimmedQuery)
+            ? [
+                {
+                  id: objective.id,
+                  title: objective.title,
+                  subtitle: 'Objectif',
+                  href: { pathname: '/objectifs' as const, params: { objectiveId: objective.id } },
+                },
+              ]
+            : [],
+        ),
+        ...timelineEntries.flatMap((entry) =>
+          includesQuery(`${entry.title} ${entry.note} ${entry.date}`, trimmedQuery)
+            ? [
+                {
+                  id: entry.id,
+                  title: entry.title,
+                  subtitle: 'Frise',
+                  href: '/frise' as const,
+                },
+              ]
+            : [],
+        ),
+        ...(preferences.showSensitiveContent
+          ? treatments.flatMap((treatment) =>
+              includesQuery(`${treatment.name} ${treatment.dose}`, trimmedQuery)
+                ? [
+                    {
+                      id: treatment.id,
+                      title: treatment.name || 'Traitement',
+                      subtitle: 'Traitement',
+                      href: treatmentHref,
+                    },
+                  ]
+                : [],
+            )
+          : []),
+        ...books.flatMap((book) =>
+          includesQuery(`${book.name} ${book.author} ${book.notes}`, trimmedQuery)
+            ? [
+                {
+                  id: book.id,
+                  title: book.name,
+                  subtitle: 'Livre',
+                  href: { pathname: '/livres' as const, params: { bookId: book.id } },
+                },
+              ]
+            : [],
+        ),
+        ...ideas.flatMap((idea) =>
+          includesQuery(`${idea.text} ${idea.tags.join(' ')}`, trimmedQuery)
+            ? [
+                {
+                  id: idea.id,
+                  title: idea.text,
+                  subtitle: 'IdÃ©e',
+                  href: { pathname: '/idees' as const, params: { ideaId: idea.id } },
+                },
+              ]
+            : [],
+        ),
+        ...visibleEntityTags.flatMap((entry) =>
+          includesQuery(entry.tag, trimmedQuery)
+            ? [
+                {
+                  id: `${entry.entityKind}-${entry.entityId}-${entry.tag}`,
+                  title: `#${entry.tag}`,
+                  subtitle: 'Tag global',
+                  href: '/liens' as const,
+                },
+              ]
+            : [],
+        ),
+        ...entityLinks.flatMap((link) =>
+          link.note && includesQuery(link.note, trimmedQuery)
+            ? [
+                {
+                  id: link.id,
+                  title: link.note,
+                  subtitle: 'Lien transversal',
+                  href: '/liens' as const,
+                },
+              ]
+            : [],
+        ),
+        ...(preferences.showSensitiveContent
+          ? substances.flatMap((substance) =>
+              includesQuery(`${substance.name} ${substance.notes} ${substance.firstTried}`, trimmedQuery)
+                ? [
+                    {
+                      id: substance.id,
+                      title: substance.name,
+                      subtitle: 'Substance',
+                      href: { pathname: '/pharmaco' as const, params: { substanceId: substance.id } },
+                    },
+                  ]
+                : [],
+            )
+          : []),
+        ...(preferences.showSensitiveContent
+          ? doses.flatMap((dose) =>
+              includesQuery(`${dose.substance} ${dose.notes} ${dose.contextTags.join(' ')}`, trimmedQuery)
+                ? [
+                    {
+                      id: dose.id,
+                      title: dose.substance,
+                      subtitle: 'Conso',
+                      href: { pathname: '/conso' as const, params: { doseId: dose.id } },
+                    },
+                  ]
+                : [],
+            )
+          : []),
+        ...games.flatMap((game) =>
+          includesQuery(`${game.name} ${game.platform} ${game.notes}`, trimmedQuery)
+            ? [
+                {
+                  id: game.id,
+                  title: game.name,
+                  subtitle: 'Jeu',
+                  href: { pathname: '/jeux' as const, params: { gameId: game.id } },
+                },
+              ]
+            : [],
+        ),
+        ...countries.flatMap((country) =>
+          includesQuery(`${country.name} ${country.city} ${country.year} ${country.notes}`, trimmedQuery)
+            ? [
+                {
+                  id: country.id,
+                  title: country.name,
+                  subtitle: 'Pays',
+                  href: { pathname: '/pays' as const, params: { countryId: country.id } },
+                },
+              ]
+            : [],
+        ),
+        ...concerts.flatMap((concert) =>
+          includesQuery(`${concert.name} ${concert.venue} ${concert.notes}`, trimmedQuery)
+            ? [
+                {
+                  id: concert.id,
+                  title: concert.name,
+                  subtitle: 'Concert',
+                  href: { pathname: '/concerts' as const, params: { concertId: concert.id } },
+                },
+              ]
+            : [],
+        ),
+      ]
+    : [];
+  const searchResults = rawSearchResults.filter((result) => {
+    if (searchScope === 'all') {
+      return true;
+    }
+
+    if (searchScope === 'notes') {
+      return ['Note', 'IdÃ©e', 'ModÃ¨le', 'Livre'].includes(result.subtitle);
+    }
+
+    if (searchScope === 'people') {
+      return result.subtitle === 'Cercle';
+    }
+
+    if (searchScope === 'agenda') {
+      return ['Rappel', 'Routine quotidienne', 'Frise', 'Objectif', 'Concert'].includes(result.subtitle);
+    }
+
+    if (searchScope === 'health') {
+      return ['Traitement', 'Substance', 'Conso'].includes(result.subtitle);
+    }
+
+    return ['Tag global', 'Lien transversal'].includes(result.subtitle);
+  }).slice(0, 8);
+
+  const scheduledReminderCount = reminders.filter((reminder) => reminder.status === 'scheduled').length;
+  const openObjectives = objectives.filter((objective) => objective.progress < 100);
+  const reviewRange = useMemo(() => {
+    if (reviewRangeMode === 'custom') {
+      const days = buildDayRange(customReviewStart, customReviewEnd);
+      const first = days[0] ?? customReviewStart;
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    minHeight: 64,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  weeklyReviewRowBorder: {
+    borderTopColor: colors.line,
+    borderTopWidth: 1,
+  },
+  weeklyReviewMain: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  weeklyReviewLabel: {
+    color: colors.text,
+    fontFamily: fonts.bodyBold,
+    fontSize: 14,
+  },
+  weeklyReviewDetail: {
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 12,
+  },
+  weeklyReviewValue: {
+    color: colors.accent,
+    flexShrink: 0,
+    fontFamily: fonts.title,
+    fontSize: 20,
+  },
+  resultRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    minHeight: 62,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  resultRowBorder: {
+    borderTopColor: colors.line,
+    borderTopWidth: 1,
+  },
+  resultMain: {
+    flex: 1,
+    gap: 2,
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 0,
+  },
+  resultTitle: {
+    color: colors.text,
+    fontFamily: fonts.bodySemi,
+    fontSize: 15,
+  },
+  resultMeta: {
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 12,
+  },
+  resultActionButton: {
+    alignItems: 'center',
+    backgroundColor: colors.chip,
+    borderRadius: radii.pill,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 38,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  resultActionLabel: {
+    color: colors.accent,
+    fontFamily: fonts.bodyBold,
+    fontSize: 12,
+  },
+  resultArrow: {
+    color: colors.muted,
+    fontFamily: fonts.title,
+    fontSize: 20,
+  },
+  emptyInline: {
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    padding: spacing.lg,
+  },
+  noteCard: {
+    alignSelf: 'stretch',
+    backgroundColor: colors.surface,
+    borderColor: colors.lineStrong,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.lg,
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+  },
+  noteTitle: {
+    color: colors.text,
+    fontFamily: fonts.title,
+    fontSize: 21,
+  },
+  noteBody: {
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  quickGrid: {
+    alignSelf: 'stretch',
+    gap: spacing.md,
+  },
+  quickGridCompact: {
+    gap: spacing.sm,
+  },
+  quickGridRow: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  quickGridRowCompact: {
+    gap: spacing.sm,
+  },
+  quickTile: {
+    backgroundColor: colors.surface,
+    borderColor: colors.lineStrong,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    flex: 1,
+    flexBasis: 0,
+    justifyContent: 'space-between',
+    maxWidth: '100%',
+    minHeight: 142,
+    minWidth: 0,
+    overflow: 'hidden',
+    padding: spacing.lg,
+    position: 'relative',
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.1,
+    shadowRadius: 24,
+  },
+  quickTilePressed: {
+    borderColor: colors.accent,
+    opacity: 0.92,
+    shadowOpacity: 0.04,
+    transform: [{ scale: 0.982 }],
+  },
+  quickTileDense: {
+    minHeight: 122,
+    padding: spacing.md,
+  },
+  quickTileSingle: {
+    flexBasis: 'auto',
+    minHeight: 154,
+  },
+  quickTileHero: {
+    minHeight: 196,
+  },
+  quickTileWide: {
+    minHeight: 156,
+  },
+  quickTileTall: {
+    minHeight: 188,
+  },
+  quickTileCompact: {},
+  quickTileAccent: {
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.accentSoft,
+  },
+  quickTileSun: {
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.sun,
+  },
+  quickTilePrimary: {
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.accent,
+  },
+  quickTileNeutral: {
+    backgroundColor: colors.surface,
+    borderColor: colors.lineStrong,
+  },
+  quickGlow: {
+    ...StyleSheet.absoluteFill,
+    opacity: 0.9,
+  },
+  quickTopRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+    minWidth: 0,
+    zIndex: 1,
+  },
+  quickEyebrow: {
+    borderRadius: radii.pill,
+    flexShrink: 1,
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    letterSpacing: 1.3,
+    overflow: 'hidden',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    textTransform: 'uppercase',
+  },
+  quickEyebrowAccent: {
+    backgroundColor: colors.accentSoft,
+    color: colors.accent,
+  },
+  quickEyebrowSun: {
+    backgroundColor: 'rgba(235, 179, 90, 0.16)',
+    color: colors.warning,
+  },
+  quickEyebrowPrimary: {
+    backgroundColor: colors.accentSoft,
+    color: colors.accent,
+  },
+  quickEyebrowNeutral: {
+    backgroundColor: colors.chip,
+    color: colors.muted,
+  },
+  quickValue: {
+    color: colors.text,
+    flexShrink: 1,
+    fontFamily: fonts.display,
+    fontSize: 24,
+    lineHeight: 26,
+    textAlign: 'right',
+  },
+  quickValueHero: {
+    fontSize: 30,
+    lineHeight: 32,
+  },
+  quickValueWide: {
+    fontSize: 26,
+    lineHeight: 28,
+  },
+  quickValueCompact: {
+    fontSize: 18,
+    lineHeight: 20,
+  },
+  quickValueLong: {
+    fontSize: 16,
+    lineHeight: 18,
+  },
+  quickBodyBlock: {
+    gap: spacing.xs,
+    minWidth: 0,
+    zIndex: 1,
+  },
+  quickTitle: {
+    color: colors.text,
+    fontFamily: fonts.title,
+    fontSize: 20,
+  },
+  quickTitleLarge: {
+    fontSize: 22,
+    lineHeight: 26,
+  },
+  quickBody: {
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  quickBodyLarge: {
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  quickFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    zIndex: 1,
+  },
+  quickFooterRail: {
+    backgroundColor: colors.lineStrong,
+    borderRadius: radii.pill,
+    height: 4,
+    width: 44,
+  },
+  quickArrowBubble: {
+    alignItems: 'center',
+    backgroundColor: colors.chip,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  quickArrow: {
+    color: colors.accent,
+    fontFamily: fonts.title,
+    fontSize: 18,
+  },
+});
