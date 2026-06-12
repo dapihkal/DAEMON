@@ -931,6 +931,8 @@ function normalizeLegacyBackup(payload: LegacyBackup): NormalizedBackup {
       body,
       tags: sanitizeTags(entry.tags),
       updatedAt: asNumber(entry.updatedAt, now - index),
+      pinned: asBoolean(entry.pinned, false),
+      archived: asBoolean(entry.archived, false),
     };
 
     return [note];
@@ -1194,6 +1196,8 @@ function normalizeMobileBackup(payload: JsonRecord): NormalizedBackup {
         body: asString(entry.body, ''),
         tags: sanitizeTags(entry.tags),
         updatedAt: asNumber(entry.updatedAt, Date.now() - index),
+        pinned: asBoolean(entry.pinned, false),
+        archived: asBoolean(entry.archived, false),
       },
     ];
   });
@@ -1563,12 +1567,14 @@ export async function importBackup(db: SQLiteDatabase, rawJson: string): Promise
 
     for (const note of parsed.notes) {
       await db.runAsync(
-        'INSERT INTO notes (id, title, body, tags_json, updated_at) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO notes (id, title, body, tags_json, updated_at, pinned, archived) VALUES (?, ?, ?, ?, ?, ?, ?)',
         note.id,
         note.title,
         note.body,
         JSON.stringify(note.tags),
         note.updatedAt,
+        note.pinned ? 1 : 0,
+        note.archived ? 1 : 0,
       );
     }
 

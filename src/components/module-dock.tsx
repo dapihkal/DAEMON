@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme, useThemePreferences } from '../theme/theme-provider';
 import { fonts, radii, spacing } from '../theme/tokens';
+import { selectionHaptic } from '../lib/haptics';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -240,6 +241,7 @@ export function ModuleDock() {
                       hitSlop={hitSlop}
                       key={module.id}
                       onPress={() => {
+                        selectionHaptic(preferences.reduceMotion);
                         setOpenGroupId(null);
                         router.push(module.href);
                       }}
@@ -283,7 +285,10 @@ export function ModuleDock() {
                 accessibilityRole="button"
                 hitSlop={hitSlop}
                 key={group.id}
-                onPress={() => setOpenGroupId((current) => (current === group.id ? null : group.id))}
+                onPress={() => {
+                  selectionHaptic(preferences.reduceMotion);
+                  setOpenGroupId((current) => (current === group.id ? null : group.id));
+                }}
                 style={({ pressed }) => [
                   styles.groupButton,
                   selected && styles.groupButtonSelected,
@@ -301,6 +306,7 @@ export function ModuleDock() {
                 >
                   {group.label}
                 </Text>
+                {activeGroupId === group.id ? <View style={styles.activeDot} /> : null}
               </Pressable>
             );
           })}
@@ -378,6 +384,11 @@ const createStyles = (
   moduleIconShellActive: {
     backgroundColor: colors.accent,
     borderColor: colors.accent,
+    elevation: 6,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 10,
   },
   moduleLabel: {
     color: colors.text,
@@ -418,6 +429,9 @@ const createStyles = (
   },
   groupButtonSelected: {
     backgroundColor: colors.accentSoft,
+    borderColor: colors.lineStrong,
+    borderRadius: radii.lg,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   groupIconShell: {
     alignItems: 'center',
@@ -432,6 +446,11 @@ const createStyles = (
   groupIconShellSelected: {
     backgroundColor: colors.accent,
     borderColor: colors.accent,
+    elevation: 6,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 10,
   },
   groupLabel: {
     color: colors.muted,
@@ -441,6 +460,19 @@ const createStyles = (
   },
   groupLabelSelected: {
     color: colors.accent,
+  },
+  activeDot: {
+    backgroundColor: colors.accent,
+    borderRadius: radii.pill,
+    bottom: 0,
+    elevation: 4,
+    height: 4,
+    position: 'absolute',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 5,
+    width: 4,
   },
   pressed: {
     opacity: 0.76,

@@ -7,6 +7,7 @@ import { AppShell } from '../../src/components/app-shell';
 import { EmptyState } from '../../src/components/empty-state';
 import { SectionTitle } from '../../src/components/section-title';
 import { SwipeActionRow } from '../../src/components/swipe-action-row';
+import { useUndo } from '../../src/components/undo-toast';
 import {
   createChecklist,
   createChecklistItem,
@@ -14,6 +15,8 @@ import {
   deleteChecklistItem,
   getChecklist,
   listChecklists,
+  restoreChecklist,
+  restoreChecklistItem,
   toggleChecklistItem,
 } from '../../src/db/repositories';
 import type { Checklist, ChecklistSummary } from '../../src/db/types';
@@ -26,6 +29,7 @@ export default function ListesScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
+  const { showUndo } = useUndo();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const params = useLocalSearchParams<{ listId?: string }>();
   const [lists, setLists] = useState<ChecklistSummary[]>([]);
@@ -93,6 +97,7 @@ export default function ListesScreen() {
   };
 
   const handleDeleteList = async (listId: string) => {
+    const snapshot = await getChecklist(db, listId);
     await deleteChecklist(db, listId);
     if (activeList?.id === listId) {
       setActiveList(null);
@@ -100,6 +105,16 @@ export default function ListesScreen() {
     }
     await deletionHaptic(preferences.reduceMotion);
     setLists(await listChecklists(db));
+
+    if (snapshot) {
+      showUndo({
+        message: `Liste « ${snapshot.name} » supprimée`,
+        onUndo: async () => {
+          await restoreChecklist(db, snapshot);
+          setLists(await listChecklists(db));
+        },
+      });
+    }
   };
 
   const handleCreateItem = async () => {
@@ -139,10 +154,24 @@ export default function ListesScreen() {
       return;
     }
 
+    const listId = activeList.id;
+    const item = activeList.items.find((entry) => entry.id === itemId);
     await deleteChecklistItem(db, itemId);
     await deletionHaptic(preferences.reduceMotion);
-    setActiveList(await getChecklist(db, activeList.id));
+    setActiveList(await getChecklist(db, listId));
     setLists(await listChecklists(db));
+
+    if (item) {
+      showUndo({
+        message: `« ${item.text} » supprimé de la liste`,
+        onUndo: async () => {
+          await restoreChecklistItem(db, listId, item);
+          const refreshed = await getChecklist(db, listId);
+          setActiveList((current) => (current && current.id === listId ? refreshed : current));
+          setLists(await listChecklists(db));
+        },
+      });
+    }
   };
 
   if (activeList) {

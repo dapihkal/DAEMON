@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { FlashList, type ListRenderItem } from '@shopify/flash-list';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -10,8 +10,9 @@ import { PeoplePicker } from '../../src/components/people-picker';
 import { SectionTitle } from '../../src/components/section-title';
 import { SkeletonScreen } from '../../src/components/skeleton-screen';
 import { SwipeActionRow } from '../../src/components/swipe-action-row';
-import { replaceEntityPersonLinks } from '../../src/db/cross-repositories';
-import { deleteNote, listNotes, saveNote } from '../../src/db/repositories';
+import { useUndo } from '../../src/components/undo-toast';
+import { listEntityPersonIds, replaceEntityPersonLinks } from '../../src/db/cross-repositories';
+import { deleteNote, listNotes, restoreNote, saveNote, setNoteArchived, setNotePinned } from '../../src/db/repositories';
 import type { Note } from '../../src/db/types';
 import { confirmationHaptic, deletionHaptic, selectionHaptic } from '../../src/lib/haptics';
 import { useTheme, useThemePreferences } from '../../src/theme/theme-provider';
@@ -50,6 +51,7 @@ export default function NotesScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
+  const { showUndo } = useUndo();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const params = useLocalSearchParams<{ noteId?: string }>();
   const [notes, setNotes] = useState<Note[]>([]);
@@ -58,19 +60,27 @@ export default function NotesScreen() {
   const [draft, setDraft] = useState<NoteDraft | null>(null);
 
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const archivedCount = useMemo(() => notes.filter((note) => note.archived).length, [notes]);
+
+  const baseNotes = useMemo(
+    () => notes.filter((note) => note.archived === showArchived),
+    [notes, showArchived],
+  );
 
   const uniqueTags = useMemo(() => {
     const set = new Set<string>();
-    notes.forEach((note) => note.tags.forEach((tag) => set.add(tag.trim().toLowerCase())));
+    baseNotes.forEach((note) => note.tags.forEach((tag) => set.add(tag.trim().toLowerCase())));
     return [...set].sort((a, b) => a.localeCompare(b, 'fr-FR'));
-  }, [notes]);
+  }, [baseNotes]);
 
   const filteredNotes = useMemo(() => {
     if (!selectedTag) {
-      return notes;
+      return baseNotes;
     }
-    return notes.filter((note) => note.tags.some((tag) => tag.trim().toLowerCase() === selectedTag));
-  }, [notes, selectedTag]);
+    return baseNotes.filter((note) => note.tags.some((tag) => tag.trim().toLowerCase() === selectedTag));
+  }, [baseNotes, selectedTag]);
 
   const refresh = useCallback(() => {
     let active = true;
@@ -97,6 +107,37 @@ export default function NotesScreen() {
 
   useFocusEffect(refresh);
 
+  const handleCloseDraft = () => {
+    if (!draft) {
+      return;
+    }
+
+    let dirty: boolean;
+    if (draft.id) {
+      const original = notes.find((entry) => entry.id === draft.id);
+      dirty = !original
+        || draft.title !== original.title
+        || draft.body !== original.body
+        || draft.tags !== original.tags.join(', ');
+    } else {
+      dirty = Boolean(draft.title.trim() || draft.body.trim() || draft.tags.trim() || draft.people.length);
+    }
+
+    if (!dirty) {
+      setDraft(null);
+      return;
+    }
+
+    Alert.alert(
+      'Modifications non enregistrées',
+      'Tu as des changements non sauvegardés sur cette note.',
+      [
+        { text: "Continuer l'édition", style: 'cancel' },
+        { text: 'Abandonner', style: 'destructive', onPress: () => setDraft(null) },
+      ],
+    );
+  };
+
   const handleSave = async () => {
     if (!draft || (!draft.title.trim() && !draft.body.trim())) {
       return;
@@ -122,13 +163,57 @@ export default function NotesScreen() {
     setNotes(await listNotes(db));
   };
 
+  const deleteNoteWithUndo = useCallback(
+    async (note: Note) => {
+      const personIds = await listEntityPersonIds(db, { entityKind: 'note', entityId: note.id });
+      await replaceEntityPersonLinks(db, { entityKind: 'note', entityId: note.id, personIds: [] });
+      await deleteNote(db, note.id);
+      showUndo({
+        message: `Note « ${note.title || 'sans titre'} » supprimée`,
+        onUndo: async () => {
+          await restoreNote(db, note);
+          await replaceEntityPersonLinks(db, { entityKind: 'note', entityId: note.id, personIds });
+          setNotes(await listNotes(db));
+        },
+      });
+    },
+    [db, showUndo],
+  );
+
+  const togglePin = useCallback(
+    async (note: Note) => {
+      await setNotePinned(db, note.id, !note.pinned);
+      void selectionHaptic(preferences.reduceMotion);
+      setNotes(await listNotes(db));
+    },
+    [db, preferences.reduceMotion],
+  );
+
+  const handleArchiveToggle = async () => {
+    if (!draft?.id) {
+      return;
+    }
+
+    const note = notes.find((entry) => entry.id === draft.id);
+    await setNoteArchived(db, draft.id, !(note?.archived ?? false));
+    await confirmationHaptic(preferences.reduceMotion);
+    setDraft(null);
+    setFocusedNoteId(null);
+    setNotes(await listNotes(db));
+  };
+
   const handleDelete = async () => {
     if (!draft?.id) {
       return;
     }
 
-    await replaceEntityPersonLinks(db, { entityKind: 'note', entityId: draft.id, personIds: [] });
-    await deleteNote(db, draft.id);
+    const note = notes.find((entry) => entry.id === draft.id);
+    if (note) {
+      await deleteNoteWithUndo(note);
+    } else {
+      await replaceEntityPersonLinks(db, { entityKind: 'note', entityId: draft.id, personIds: [] });
+      await deleteNote(db, draft.id);
+    }
     await deletionHaptic(preferences.reduceMotion);
     setDraft(null);
     setFocusedNoteId(null);
@@ -141,8 +226,7 @@ export default function NotesScreen() {
         accessibilityLabel={`Supprimer la note ${note.title || 'sans titre'}`}
         key={note.id}
         onAction={async () => {
-          await replaceEntityPersonLinks(db, { entityKind: 'note', entityId: note.id, personIds: [] });
-          await deleteNote(db, note.id);
+          await deleteNoteWithUndo(note);
           setFocusedNoteId((current) => (current === note.id ? null : current));
           setNotes(await listNotes(db));
         }}
@@ -157,7 +241,22 @@ export default function NotesScreen() {
           }}
           style={({ pressed }) => [styles.noteCard, focusedNoteId === note.id && styles.noteCardFocused, pressed && styles.pressedCard]}
         >
-          <Text style={styles.noteTitle}>{note.title}</Text>
+          <View style={styles.noteHeaderRow}>
+            <Text style={[styles.noteTitle, styles.noteTitleFlex]}>{note.title}</Text>
+            {!note.archived ? (
+              <Pressable
+                accessibilityLabel={note.pinned ? `Désépingler la note ${note.title || 'sans titre'}` : `Épingler la note ${note.title || 'sans titre'}`}
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => void togglePin(note)}
+                style={({ pressed }) => [styles.pinChip, note.pinned && styles.pinChipActive, pressed && styles.pressedSoft]}
+              >
+                <Text style={[styles.pinChipLabel, note.pinned && styles.pinChipLabelActive]}>
+                  {note.pinned ? 'Épinglée' : 'Épingler'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
           <Text numberOfLines={3} style={styles.noteBody}>{note.body || 'Sans contenu detaille pour le moment.'}</Text>
           {note.tags.length ? (
             <View style={styles.tagRow}>
@@ -179,13 +278,13 @@ export default function NotesScreen() {
         </Pressable>
       </SwipeActionRow>
     ),
-    [db, focusedNoteId, preferences.reduceMotion, router, styles],
+    [db, deleteNoteWithUndo, focusedNoteId, preferences.reduceMotion, router, styles, togglePin],
   );
 
   if (draft) {
     return (
       <AppShell kicker="Carnet" title={draft.id ? 'Modifier la note' : 'Nouvelle note'}>
-        <Pressable accessibilityLabel="Retour aux notes" accessibilityRole="button" onPress={() => setDraft(null)} style={({ pressed }) => [styles.backButton, pressed && styles.pressedSoft]}>
+        <Pressable accessibilityLabel="Retour aux notes" accessibilityRole="button" onPress={handleCloseDraft} style={({ pressed }) => [styles.backButton, pressed && styles.pressedSoft]}>
           <Text style={styles.backLabel}>Retour aux notes</Text>
         </Pressable>
 
@@ -231,6 +330,19 @@ export default function NotesScreen() {
               </Pressable>
             ) : null}
           </View>
+
+          {draft.id ? (
+            <Pressable
+              accessibilityLabel={notes.find((entry) => entry.id === draft.id)?.archived ? 'Désarchiver la note' : 'Archiver la note'}
+              accessibilityRole="button"
+              onPress={handleArchiveToggle}
+              style={({ pressed }) => [styles.archiveButton, pressed && styles.pressedSoft]}
+            >
+              <Text style={styles.archiveButtonLabel}>
+                {notes.find((entry) => entry.id === draft.id)?.archived ? 'Désarchiver cette note' : 'Archiver cette note'}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       </AppShell>
     );
@@ -257,12 +369,32 @@ export default function NotesScreen() {
         keyExtractor={(note) => note.id}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={<EmptyState title="Aucune note" message="Créer une note ici doit toujours rester plus rapide que la remettre à plus tard." />}
+        ListEmptyComponent={
+          showArchived
+            ? <EmptyState title="Aucune archive" message="Les notes archivées apparaîtront ici, hors de la vue principale." />
+            : <EmptyState title="Aucune note" message="Créer une note ici doit toujours rester plus rapide que la remettre à plus tard." />
+        }
         ListHeaderComponent={(
           <View style={{ gap: spacing.md }}>
             <Pressable accessibilityLabel="Créer une nouvelle note" accessibilityRole="button" onPress={() => setDraft(createEmptyDraft())} style={({ pressed }) => [styles.newNoteButton, pressed && styles.pressedCard]}>
               <Text style={styles.newNoteButtonLabel}>+ Nouvelle note</Text>
             </Pressable>
+            {archivedCount > 0 || showArchived ? (
+              <Pressable
+                accessibilityLabel={showArchived ? 'Revenir aux notes actives' : 'Afficher les notes archivées'}
+                accessibilityRole="button"
+                onPress={() => {
+                  void selectionHaptic(preferences.reduceMotion);
+                  setSelectedTag(null);
+                  setShowArchived((current) => !current);
+                }}
+                style={({ pressed }) => [styles.archiveToggle, showArchived && styles.archiveToggleActive, pressed && styles.pressedSoft]}
+              >
+                <Text style={[styles.archiveToggleLabel, showArchived && styles.archiveToggleLabelActive]}>
+                  {showArchived ? '← Retour aux notes actives' : `Archives (${archivedCount})`}
+                </Text>
+              </Pressable>
+            ) : null}
             {uniqueTags.length > 0 ? (
               <ScrollView
                 horizontal
@@ -433,6 +565,70 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
   noteCardFocused: {
     borderColor: colors.accent,
     borderWidth: 2,
+  },
+  noteHeaderRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minWidth: 0,
+  },
+  noteTitleFlex: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pinChip: {
+    backgroundColor: colors.chip,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+  },
+  pinChipActive: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  pinChipLabel: {
+    color: colors.accent,
+    fontFamily: fonts.bodyBold,
+    fontSize: 11,
+  },
+  pinChipLabelActive: {
+    color: colors.white,
+  },
+  archiveToggle: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  archiveToggleActive: {
+    borderColor: colors.accent,
+  },
+  archiveToggleLabel: {
+    color: colors.muted,
+    fontFamily: fonts.bodyBold,
+    fontSize: 12,
+  },
+  archiveToggleLabelActive: {
+    color: colors.accent,
+  },
+  archiveButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing.sm,
+  },
+  archiveButtonLabel: {
+    color: colors.muted,
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
   },
   noteTitle: {
     color: colors.text,

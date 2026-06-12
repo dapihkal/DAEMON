@@ -9,6 +9,7 @@ import { EmptyState } from '../../src/components/empty-state';
 import { PeoplePicker } from '../../src/components/people-picker';
 import { SectionTitle } from '../../src/components/section-title';
 import { SwipeActionRow } from '../../src/components/swipe-action-row';
+import { useUndo } from '../../src/components/undo-toast';
 import { replaceEntityPersonLinks, listEntityPersonIds } from '../../src/db/cross-repositories';
 import {
   deleteReminder,
@@ -16,6 +17,7 @@ import {
   listReminders,
   listRoutines,
   markReminderDone,
+  restoreReminder,
   saveReminder,
   setReminderNotificationId,
   setRoutineEnabled,
@@ -123,6 +125,7 @@ export default function RemindersScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
+  const { showUndo } = useUndo();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const params = useLocalSearchParams<{ reminderId?: string; add?: string; date?: string }>();
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -270,6 +273,56 @@ export default function RemindersScreen() {
     setReminders(await listReminders(db));
   };
 
+  const deleteReminderWithUndo = async (reminder: Reminder) => {
+    await cancelReminderNotificationAsync(reminder.notificationId);
+    await deleteReminder(db, reminder.id);
+    showUndo({
+      message: `Rappel « ${reminder.title} » supprimé`,
+      onUndo: async () => {
+        await restoreReminder(db, reminder);
+        const restored = { ...reminder, notificationId: null };
+        if (restored.status === 'scheduled') {
+          await syncReminderNotification(restored);
+        }
+        setReminders(await listReminders(db));
+      },
+    });
+  };
+
+  const handleQuickPostpone = async (reminder: Reminder, target: 'hour' | 'tonight' | 'tomorrow') => {
+    const now = new Date();
+    let nextDate: Date;
+
+    if (target === 'hour') {
+      nextDate = new Date(now.getTime() + 60 * 60 * 1000);
+    } else if (target === 'tonight') {
+      nextDate = new Date(now);
+      nextDate.setHours(20, 0, 0, 0);
+      if (nextDate.getTime() <= now.getTime()) {
+        nextDate.setDate(nextDate.getDate() + 1);
+      }
+    } else {
+      nextDate = new Date(now);
+      nextDate.setDate(nextDate.getDate() + 1);
+      nextDate.setHours(9, 0, 0, 0);
+    }
+
+    await cancelReminderNotificationAsync(reminder.notificationId);
+    const saved = await saveReminder(db, {
+      id: reminder.id,
+      title: reminder.title,
+      scheduledFor: nextDate.toISOString(),
+      repeatRule: reminder.repeatRule,
+      category: reminder.category,
+      status: 'scheduled',
+      notificationId: null,
+    });
+
+    await syncReminderNotification(saved);
+    await confirmationHaptic(preferences.reduceMotion);
+    setReminders(await listReminders(db));
+  };
+
   const handleDeleteReminder = async () => {
     if (!draft?.id) {
       return;
@@ -281,8 +334,13 @@ export default function RemindersScreen() {
       personIds: [],
     });
 
-    await cancelReminderNotificationAsync(draft.notificationId);
-    await deleteReminder(db, draft.id);
+    const reminder = reminders.find((entry) => entry.id === draft.id);
+    if (reminder) {
+      await deleteReminderWithUndo(reminder);
+    } else {
+      await cancelReminderNotificationAsync(draft.notificationId);
+      await deleteReminder(db, draft.id);
+    }
     await deletionHaptic(preferences.reduceMotion);
     setDraft(null);
     setFocusedReminderId(null);
@@ -349,7 +407,7 @@ export default function RemindersScreen() {
     setRoutines(nextRoutines);
   };
 
-  const renderReminderRows = (items: Reminder[]) =>
+  const renderReminderRows = (items: Reminder[], options: { quickPostpone?: boolean } = {}) =>
     items.map((reminder) => (
       <SwipeActionRow
         actionKind={reminder.status === 'done' ? 'delete' : 'done'}
@@ -358,8 +416,7 @@ export default function RemindersScreen() {
         key={reminder.id}
         onAction={async () => {
           if (reminder.status === 'done') {
-            await cancelReminderNotificationAsync(reminder.notificationId);
-            await deleteReminder(db, reminder.id);
+            await deleteReminderWithUndo(reminder);
             setReminders(await listReminders(db));
             return;
           }
@@ -391,6 +448,26 @@ export default function RemindersScreen() {
               .join(' · ')}
           </Text>
           {focusedReminderId === reminder.id ? <Text style={styles.focusedMeta}>Ouvert depuis la recherche</Text> : null}
+          {options.quickPostpone && reminder.status === 'scheduled' ? (
+            <View style={styles.snoozeRow}>
+              {([
+                { target: 'hour', label: '+1 h' },
+                { target: 'tonight', label: 'Ce soir' },
+                { target: 'tomorrow', label: 'Demain 9h' },
+              ] as const).map((option) => (
+                <Pressable
+                  accessibilityLabel={`Reporter ${reminder.title} : ${option.label}`}
+                  accessibilityRole="button"
+                  hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                  key={option.target}
+                  onPress={() => handleQuickPostpone(reminder, option.target)}
+                  style={({ pressed }) => [styles.snoozeChip, pressed && styles.pressedSoft]}
+                >
+                  <Text style={styles.snoozeChipLabel}>{option.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </Pressable>
         <Pressable
           accessibilityLabel={`${reminder.status === 'done' ? 'Rappel déjà terminé' : 'Terminer le rappel'} ${reminder.title}`}
@@ -639,14 +716,14 @@ export default function RemindersScreen() {
           {overdueReminders.length ? (
             <View style={styles.reminderGroup}>
               <Text style={[styles.groupLabel, styles.groupLabelWarning]}>En retard</Text>
-              {renderReminderRows(overdueReminders)}
+              {renderReminderRows(overdueReminders, { quickPostpone: true })}
             </View>
           ) : null}
 
           {todayReminders.length ? (
             <View style={styles.reminderGroup}>
               <Text style={styles.groupLabel}>Aujourd'hui</Text>
-              {renderReminderRows(todayReminders)}
+              {renderReminderRows(todayReminders, { quickPostpone: true })}
             </View>
           ) : null}
 
@@ -977,6 +1054,25 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     letterSpacing: 1,
     marginTop: 4,
     textTransform: 'uppercase',
+  },
+  snoozeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  snoozeChip: {
+    backgroundColor: colors.chip,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  snoozeChipLabel: {
+    color: colors.accent,
+    fontFamily: fonts.bodyBold,
+    fontSize: 11,
   },
   doneButton: {
     backgroundColor: colors.accent,

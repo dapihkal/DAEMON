@@ -1,12 +1,12 @@
-import { useMemo, type ReactNode, forwardRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, type ReactNode, forwardRef } from 'react';
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { usePathname, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
-import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 
 import { useTheme, useThemePreferences } from '../theme/theme-provider';
 import { fonts, radii, spacing } from '../theme/tokens';
@@ -59,6 +59,34 @@ export const AppShell = forwardRef<any, AppShellProps>(({
     [colors, glowBottom, glowMiddle, glowTop, inkStripe, insets.bottom, preferences.density, preferences.textScale],
   );
 
+  const enterProgress = useRef(new Animated.Value(preferences.reduceMotion ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (preferences.reduceMotion) {
+      enterProgress.setValue(1);
+      return;
+    }
+
+    Animated.timing(enterProgress, {
+      duration: 380,
+      easing: Easing.out(Easing.cubic),
+      toValue: 1,
+      useNativeDriver: true,
+    }).start();
+  }, [enterProgress, preferences.reduceMotion]);
+
+  const enterStyle = {
+    opacity: enterProgress,
+    transform: [
+      {
+        translateY: enterProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [14, 0],
+        }),
+      },
+    ],
+  };
+
   const header = (
     <LinearGradient
       accessibilityRole="header"
@@ -67,6 +95,7 @@ export const AppShell = forwardRef<any, AppShellProps>(({
       end={{ x: 1, y: 1 }}
       style={styles.headerCard}
     >
+      <View style={styles.headerTopGlint} />
       <View style={styles.headerBadgeRow}>
         <View style={styles.kickerChip}>
           <Text style={styles.kicker}>{kicker}</Text>
@@ -130,83 +159,51 @@ export const AppShell = forwardRef<any, AppShellProps>(({
     <View style={styles.root}>
       <LinearGradient colors={backgroundGradient} locations={[0, 0.58, 1]} style={StyleSheet.absoluteFill} />
       
-      {/* Dynamic Cyber/Tech Blur Spotlights & Tech Rings */}
-      <View style={styles.glowTop}>
-        <View style={styles.glowInnerRing1} />
-        <View style={styles.glowInnerRing2} />
-        <View style={styles.glowInnerRing3} />
-      </View>
-      <View style={styles.glowMiddle}>
-        <View style={styles.glowInnerRing1} />
-        <View style={styles.glowInnerRing2} />
-      </View>
-      <View style={styles.glowBottom}>
-        <View style={styles.glowInnerRing1} />
-        <View style={styles.glowInnerRing2} />
-        <View style={styles.glowInnerRing3} />
-      </View>
+      {/* Halos lumineux doux */}
+      <View style={styles.glowTop} />
+      <View style={styles.glowMiddle} />
+      <View style={styles.glowBottom} />
       <View style={styles.inkStripe} />
-      
-      {/* Background Abstract Tech Geometric Overlays */}
+
+      {/* Fond géométrique épuré */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <Svg height="100%" width="100%">
-          {/* Subtle Grid Matrix */}
+          {/* Trame fine */}
           <Path
-            d="M 0 40 L 1000 40 M 0 80 L 1000 80 M 0 120 L 1000 120 M 0 160 L 1000 160 M 0 200 L 1000 200 M 0 240 L 1000 240 M 0 280 L 1000 280 M 0 320 L 1000 320 M 0 360 L 1000 360 M 0 400 L 1000 400 M 0 440 L 1000 440 M 0 480 L 1000 480 M 0 520 L 1000 520 M 0 560 L 1000 560 M 0 600 L 1000 600 M 0 640 L 1000 640 M 0 680 L 1000 680 M 0 720 L 1000 720 M 0 760 L 1000 760 M 0 800 L 1000 800 M 0 840 L 1000 840 M 0 880 L 1000 880"
+            d="M 0 110 L 1000 110 M 0 220 L 1000 220 M 0 330 L 1000 330 M 0 440 L 1000 440 M 0 550 L 1000 550 M 0 660 L 1000 660 M 0 770 L 1000 770 M 0 880 L 1000 880"
             stroke={colors.line}
             strokeWidth="0.8"
-            opacity="0.25"
-          />
-          <Path
-            d="M 40 0 L 40 2000 M 80 0 L 80 2000 M 120 0 L 120 2000 M 160 0 L 160 2000 M 200 0 L 200 2000 M 240 0 L 240 2000 M 280 0 L 280 2000 M 320 0 L 320 2000 M 360 0 L 320 2000 M 360 0 L 360 2000 M 400 0 L 400 2000"
-            stroke={colors.line}
-            strokeWidth="0.8"
-            opacity="0.2"
-          />
-
-          {/* Abstract HUD crosshair markers & angle ticks */}
-          {/* Top Left Corner Bracket */}
-          <Path d="M 20 50 L 40 50 M 20 50 L 20 70" stroke={colors.accent} strokeWidth="1.5" opacity="0.4" />
-          {/* Top Right Corner Bracket */}
-          <Path d="M 360 50 L 380 50 M 380 50 L 380 70" stroke={colors.accent} strokeWidth="1.5" opacity="0.4" />
-          
-          {/* HUD Tech Circle Radar element on background */}
-          <Circle cx="340" cy="180" r="60" stroke={colors.lineStrong} strokeWidth="1" strokeDasharray="3 6" fill="none" opacity="0.22" />
-          <Circle cx="340" cy="180" r="100" stroke={colors.accent} strokeWidth="0.5" strokeDasharray="12 18" fill="none" opacity="0.12" />
-          <Line x1="340" y1="60" x2="340" y2="300" stroke={colors.line} strokeWidth="0.5" opacity="0.1" />
-          <Line x1="220" y1="180" x2="460" y2="180" stroke={colors.line} strokeWidth="0.5" opacity="0.1" />
-
-          {/* Tech bits and digital coordinate markers */}
-          <Rect x="20" y="220" width="8" height="8" stroke={colors.accent} strokeWidth="1" fill="none" opacity="0.3" />
-          <Rect x="24" y="224" width="12" height="1" fill={colors.accent} opacity="0.25" />
-          <Line x1="20" y1="260" x2="80" y2="260" stroke={colors.accent} strokeWidth="1" opacity="0.3" strokeDasharray="4 4" />
-          
-          {/* Diagonal tech stripe patterns */}
-          <Path
-            d="M -40 450 L 160 250 M -20 450 L 180 250 M 0 450 L 200 250 M 20 450 L 220 250 M 40 450 L 240 250"
-            stroke={colors.accent}
-            strokeWidth="2"
             opacity="0.12"
           />
-
-          {/* Additional decorative tech wireframe */}
           <Path
-            d="M 10 580 L 30 600 L 120 600 L 130 590 L 200 590"
-            stroke={colors.accent}
+            d="M 110 0 L 110 2000 M 220 0 L 220 2000 M 330 0 L 330 2000"
+            stroke={colors.line}
             strokeWidth="0.8"
-            fill="none"
-            opacity="0.15"
+            opacity="0.08"
           />
-          <Circle cx="125" cy="595" r="3" fill={colors.accent} opacity="0.25" />
-          <Circle cx="13" cy="583" r="2.5" stroke={colors.accent} strokeWidth="0.8" fill="none" opacity="0.25" />
+
+          {/* Grands arcs en haut à droite */}
+          <Circle cx="400" cy="30" r="170" stroke={colors.accent} strokeWidth="1" fill="none" opacity="0.1" />
+          <Circle cx="400" cy="30" r="230" stroke={colors.lineStrong} strokeWidth="0.8" fill="none" opacity="0.08" />
+          <Circle cx="400" cy="30" r="290" stroke={colors.line} strokeWidth="0.6" fill="none" opacity="0.07" />
+
+          {/* Faisceau diagonal discret */}
+          <Path
+            d="M -60 520 L 220 240 M -30 540 L 250 260"
+            stroke={colors.accent}
+            strokeWidth="1.2"
+            opacity="0.06"
+          />
         </Svg>
       </View>
 
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         {contentMode === 'view' ? (
           <View ref={ref} style={[styles.content, styles.staticContent]}>
-            {header}
-            {children}
+            <Animated.View style={[styles.enterWrap, enterStyle]}>
+              {header}
+              {children}
+            </Animated.View>
           </View>
         ) : (
           <KeyboardAwareScrollView
@@ -222,8 +219,10 @@ export const AppShell = forwardRef<any, AppShellProps>(({
             showsVerticalScrollIndicator={false}
             contentInsetAdjustmentBehavior="automatic"
           >
-            {header}
-            {children}
+            <Animated.View style={[styles.enterWrap, enterStyle]}>
+              {header}
+              {children}
+            </Animated.View>
           </KeyboardAwareScrollView>
         )}
       </SafeAreaView>
@@ -257,11 +256,14 @@ const createStyles = (
     flex: 1,
   },
   content: {
-    gap: compact ? 10 : 18,
     flexGrow: 1,
     paddingBottom: Math.max(spacing.xxl * 2, bottomComfort),
     paddingHorizontal: compact ? 10 : 18,
     paddingTop: compact ? 4 : 12,
+  },
+  enterWrap: {
+    flexGrow: 1,
+    gap: compact ? 10 : 18,
   },
   staticContent: {
     flex: 1,
@@ -283,6 +285,14 @@ const createStyles = (
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
+  },
+  headerTopGlint: {
+    backgroundColor: colors.lineStrong,
+    height: StyleSheet.hairlineWidth * 2,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
   },
   rightControls: {
     alignItems: 'center',
@@ -312,7 +322,9 @@ const createStyles = (
   kickerChip: {
     alignSelf: 'flex-start',
     backgroundColor: colors.accentSoft,
+    borderColor: colors.lineStrong,
     borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
@@ -328,6 +340,7 @@ const createStyles = (
     fontFamily: fonts.display,
     fontSize: largeText ? 41 : smallText ? (compact ? 30 : 34) : (compact ? 34 : 38),
     flexShrink: 1,
+    letterSpacing: -0.6,
     lineHeight: largeText ? 43 : smallText ? (compact ? 32 : 36) : (compact ? 36 : 40),
   },
   headerSignal: {
@@ -337,14 +350,22 @@ const createStyles = (
   },
   signalDot: {
     borderRadius: radii.pill,
-    height: 10,
-    width: 10,
+    height: 8,
+    width: 8,
   },
   signalDotPrimary: {
     backgroundColor: colors.accent,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
   },
   signalDotAccent: {
     backgroundColor: colors.sun,
+    shadowColor: colors.sun,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
   },
   headerRailRow: {
     alignItems: 'center',
@@ -354,76 +375,41 @@ const createStyles = (
   headerRailStrong: {
     backgroundColor: colors.accent,
     borderRadius: radii.pill,
-    height: 4,
+    height: 3,
     width: 72,
   },
   headerRailSoft: {
     backgroundColor: colors.lineStrong,
     borderRadius: radii.pill,
-    height: 4,
+    height: 3,
     width: 36,
   },
   glowTop: {
     backgroundColor: glowTop,
-    borderRadius: 220,
-    height: 260,
+    borderRadius: 240,
+    height: 300,
     position: 'absolute',
-    right: -20,
-    top: -36,
-    width: 260,
-    alignItems: 'center',
-    justifyContent: 'center',
+    right: -60,
+    top: -80,
+    width: 300,
   },
   glowMiddle: {
     backgroundColor: glowMiddle,
     borderRadius: 220,
-    height: 200,
-    left: -80,
+    height: 220,
+    left: -100,
     position: 'absolute',
-    top: 180,
-    width: 200,
-    alignItems: 'center',
-    justifyContent: 'center',
+    top: 200,
+    width: 220,
   },
   glowBottom: {
     backgroundColor: glowBottom,
-    borderRadius: 220,
-    bottom: -90,
-    height: 280,
-    left: -30,
+    borderRadius: 240,
+    bottom: -120,
+    height: 320,
+    left: -40,
     position: 'absolute',
-    width: 280,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  glowInnerRing1: {
-    position: 'absolute',
-    width: '115%',
-    height: '115%',
-    borderRadius: 999,
-    borderWidth: 1.5,
-    borderColor: colors.lineStrong,
-    borderStyle: 'dashed',
-    opacity: 0.2,
-  },
-  glowInnerRing2: {
-    position: 'absolute',
-    width: '85%',
-    height: '85%',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.accent,
-    opacity: 0.15,
-  },
-  glowInnerRing3: {
-    position: 'absolute',
-    width: '55%',
-    height: '55%',
-    borderRadius: 999,
-    borderWidth: 0.5,
-    borderColor: colors.line,
-    borderStyle: 'dashed',
-    opacity: 0.12,
+    width: 320,
   },
   inkStripe: {
     backgroundColor: inkStripe,

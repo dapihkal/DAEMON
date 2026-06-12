@@ -15,9 +15,10 @@ import {
   getJournalEntry,
   listJournalEntries,
   listRoutines,
+  listTemplates,
   saveJournalEntry,
 } from '../src/db/repositories';
-import type { JournalEntry, Routine } from '../src/db/types';
+import type { JournalEntry, Routine, Template } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { selectionHaptic } from '../src/lib/haptics';
 import { fonts, radii, spacing } from '../src/theme/tokens';
@@ -111,6 +112,11 @@ export default function JournalScreen() {
   const { data: routines = [] } = useQuery<Routine[]>({
     queryKey: ['routines'],
     queryFn: () => listRoutines(db),
+  });
+
+  const { data: templates = [] } = useQuery<Template[]>({
+    queryKey: ['templates'],
+    queryFn: () => listTemplates(db),
   });
 
   const { data: editingEntryDb } = useQuery<JournalEntry | null>({
@@ -253,6 +259,11 @@ export default function JournalScreen() {
   const chartGap = chartPoints.length > 180 ? 0 : chartPoints.length > 60 ? 1 : 4;
   const chartColumnMaxWidth = chartPoints.length > 180 ? 4 : chartPoints.length > 60 ? 8 : 12;
 
+  const insertTemplate = (template: Template) => {
+    setDraftText((current) => (current.trim() ? `${current.trimEnd()}\n\n${template.body}` : template.body));
+    selectionHaptic();
+  };
+
   const handleSave = async () => {
     const mood = selectedMood || editingEntry?.mood || 3;
     const tags = draftTags
@@ -335,6 +346,22 @@ export default function JournalScreen() {
           textAlignVertical="top"
           value={draftText}
         />
+
+        {templates.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>
+            {templates.map((template) => (
+              <Pressable
+                accessibilityLabel={`Insérer le modèle ${template.name}`}
+                accessibilityRole="button"
+                key={template.id}
+                onPress={() => insertTemplate(template)}
+                style={styles.tagChip}
+              >
+                <Text style={styles.tagChipLabel}>+ {template.name}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
 
         <TextInput
           multiline

@@ -17,7 +17,7 @@ export interface DashboardData {
 export async function getDashboardData(db: SQLiteDatabase, showSensitive: boolean, reviewDays: number): Promise<DashboardData> {
   const metricsPromise = (async () => {
     const [notes, checklists, pendingItems, reminders, routines, ideas, links, doses, substances, sleep, activities, people, projects, templates, books, games, countries, concerts] = await Promise.all([
-      db.getFirstAsync<{c: number}>('SELECT count(*) as c FROM notes').then(r => r?.c ?? 0),
+      db.getFirstAsync<{c: number}>('SELECT count(*) as c FROM notes WHERE archived = 0').then(r => r?.c ?? 0),
       db.getFirstAsync<{c: number}>('SELECT count(*) as c FROM lists').then(r => r?.c ?? 0),
       db.getFirstAsync<{c: number}>('SELECT count(*) as c FROM (SELECT list_id FROM list_items WHERE done = 0)').then(r => r?.c ?? 0),
       db.getFirstAsync<{c: number}>('SELECT count(*) as c FROM reminders WHERE status = \"scheduled\"').then(r => r?.c ?? 0),
@@ -62,7 +62,7 @@ export async function getDashboardData(db: SQLiteDatabase, showSensitive: boolea
     db.getAllAsync<any>('SELECT * FROM sleep_entries WHERE date >= ? ORDER BY date DESC LIMIT 100', recentLimitDate),
     db.getAllAsync<any>('SELECT * FROM physical_activities WHERE date >= ? ORDER BY date DESC LIMIT 100', recentLimitDate),
     listObjectives(db),
-    db.getAllAsync<any>('SELECT * FROM notes ORDER BY updated_at DESC LIMIT 2'),
+    db.getAllAsync<any>('SELECT * FROM notes WHERE archived = 0 ORDER BY pinned DESC, updated_at DESC LIMIT 2'),
   ]);
 
   return {

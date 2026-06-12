@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
+import type { ComponentProps } from 'react';
 
 import { useTheme } from '../theme/theme-provider';
 import { fonts, radii, spacing } from '../theme/tokens';
@@ -7,18 +8,20 @@ import { fonts, radii, spacing } from '../theme/tokens';
 type EmptyStateProps = {
   title: string;
   message: string;
+  icon?: ComponentProps<typeof Ionicons>['name'];
 };
 
-export function EmptyState({ title, message }: EmptyStateProps) {
+export function EmptyState({ title, message, icon = 'sparkles-outline' }: EmptyStateProps) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
 
   return (
     <View style={styles.card}>
-      <LinearGradient colors={[colors.accentSoft, colors.surfaceRaised]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.badge}>
-        <View style={styles.badgeDot} />
-        <View style={styles.badgeLine} />
-      </LinearGradient>
+      <View style={styles.iconRing}>
+        <View style={styles.iconShell}>
+          <Ionicons color={colors.accent} name={icon} size={22} />
+        </View>
+      </View>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.message}>{message}</Text>
     </View>
@@ -31,6 +34,7 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     backgroundColor: colors.surfaceRaised,
     borderColor: colors.lineStrong,
     borderRadius: radii.xl,
+    borderStyle: 'dashed',
     borderWidth: 1,
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
@@ -40,32 +44,36 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     shadowOpacity: 0.12,
     shadowRadius: 24,
   },
-  badge: {
+  iconRing: {
     alignItems: 'center',
+    borderColor: colors.lineStrong,
     borderRadius: radii.pill,
-    flexDirection: 'row',
-    gap: spacing.xs,
-    height: 38,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    height: 64,
     justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-    width: 92,
+    width: 64,
   },
-  badgeDot: {
-    backgroundColor: colors.accent,
+  iconShell: {
+    alignItems: 'center',
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.lineStrong,
     borderRadius: radii.pill,
-    height: 10,
-    width: 10,
-  },
-  badgeLine: {
-    backgroundColor: colors.sun,
-    borderRadius: radii.pill,
-    height: 4,
-    width: 34,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    width: 48,
   },
   title: {
     color: colors.text,
     fontFamily: fonts.title,
     fontSize: 22,
+    marginTop: spacing.xs,
+    textAlign: 'center',
   },
   message: {
     color: colors.muted,

@@ -1,6 +1,7 @@
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, StyleSheet, View } from 'react-native';
 
-import { useTheme } from '../theme/theme-provider';
+import { useTheme, useThemePreferences } from '../theme/theme-provider';
 import { radii, spacing } from '../theme/tokens';
 
 type SkeletonScreenProps = {
@@ -10,10 +11,33 @@ type SkeletonScreenProps = {
 
 export function SkeletonScreen({ rows = 3, compact = false }: SkeletonScreenProps) {
   const { colors } = useTheme();
+  const { preferences } = useThemePreferences();
   const styles = createStyles(colors, compact);
+  const pulse = useRef(new Animated.Value(0.55)).current;
+
+  useEffect(() => {
+    if (preferences.reduceMotion) {
+      pulse.setValue(0.8);
+      return;
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { duration: 700, toValue: 1, useNativeDriver: true }),
+        Animated.timing(pulse, { duration: 700, toValue: 0.55, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+
+    return () => loop.stop();
+  }, [preferences.reduceMotion, pulse]);
 
   return (
-    <View accessibilityLabel="Chargement" accessibilityRole="progressbar" style={styles.root}>
+    <Animated.View
+      accessibilityLabel="Chargement"
+      accessibilityRole="progressbar"
+      style={[styles.root, { opacity: pulse }]}
+    >
       <View style={styles.hero}>
         <View style={[styles.line, styles.lineShort]} />
         <View style={[styles.line, styles.lineLong]} />
@@ -29,7 +53,7 @@ export function SkeletonScreen({ rows = 3, compact = false }: SkeletonScreenProp
           <View style={[styles.line, styles.lineSmall]} />
         </View>
       ))}
-    </View>
+    </Animated.View>
   );
 }
 

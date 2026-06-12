@@ -87,6 +87,7 @@ type SearchResult = {
   id: string;
   title: string;
   subtitle: string;
+  snippet?: string;
   href: Href;
   action?: {
     label: string;
@@ -658,9 +659,25 @@ export default function HomeScreen() {
     queryKey: ['search', trimmedQuery, preferences.showSensitiveContent],
     queryFn: async () => {
       const res = await searchAll(db, trimmedQuery, preferences.showSensitiveContent);
+      const buildSnippet = (meta: string, query: string) => {
+        const flat = meta.replace(/\s+/g, ' ').trim();
+        if (!flat) {
+          return undefined;
+        }
+
+        const matchIndex = flat.toLowerCase().indexOf(query);
+        if (matchIndex < 0) {
+          return undefined;
+        }
+
+        const start = Math.max(0, matchIndex - 36);
+        const end = Math.min(flat.length, matchIndex + query.length + 64);
+        return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
+      };
       return res.map(row => ({
         id: row.id,
         title: row.title,
+        snippet: buildSnippet(row.meta ?? '', trimmedQuery),
         subtitle: row.source === 'notes' ? 'Note' : row.source === 'checklists' ? 'Liste' :
                   row.source === 'people' ? 'Cercle' : row.source === 'projects' ? 'Projet pro' :
                   row.source === 'reminders' ? 'Rappel' : row.source === 'routines' ? 'Routine quotidienne' :
@@ -1347,6 +1364,7 @@ export default function HomeScreen() {
               >
                 <Pressable accessibilityLabel={`Ouvrir ${result.title}`} accessibilityRole="button" hitSlop={hitSlop} onPress={() => router.push(result.href)} style={({ pressed }) => [styles.resultMain, pressed && styles.pressSoft]}>
                   <Text style={styles.resultTitle}>{result.title}</Text>
+                  {result.snippet ? <Text numberOfLines={2} style={styles.resultSnippet}>{result.snippet}</Text> : null}
                   <Text style={styles.resultMeta}>{result.subtitle}</Text>
                 </Pressable>
                 {result.action ? (
@@ -1698,8 +1716,8 @@ export default function HomeScreen() {
                   highlightStyle = { borderColor: colors.lineStrong };
                   iconColor = colors.text;
                 } else if (widget.id === 'birthdays') {
-                  highlightStyle = { borderColor: '#EBB35A' };
-                  iconColor = '#EBB35A';
+                  highlightStyle = { borderColor: colors.warning };
+                  iconColor = colors.warning;
                 }
 
                 return (
@@ -2496,6 +2514,13 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     fontFamily: fonts.body,
     fontSize: 12,
   },
+  resultSnippet: {
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 12.5,
+    fontStyle: 'italic',
+    lineHeight: 17,
+  },
   resultActionButton: {
     alignItems: 'center',
     backgroundColor: colors.chip,
@@ -2648,7 +2673,7 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     color: colors.accent,
   },
   quickEyebrowSun: {
-    backgroundColor: 'rgba(235, 179, 90, 0.16)',
+    backgroundColor: 'rgba(255, 159, 28, 0.16)',
     color: colors.warning,
   },
   quickEyebrowPrimary: {

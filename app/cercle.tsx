@@ -35,6 +35,7 @@ import {
   saveReminder,
   saveTimelineEntry,
 } from '../src/db/repositories';
+import { syncAllBirthdayRemindersAsync } from '../src/lib/birthday-reminders';
 import {
   getStoredCercleCategoryLabelsAsync,
   getStoredCercleLayoutAsync,
@@ -1743,6 +1744,7 @@ export default function CercleScreen() {
       setDraftFeedback(null);
       await queryClient.invalidateQueries({ queryKey: ['people'] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void listPeople(db).then((nextPeople) => syncAllBirthdayRemindersAsync(db, nextPeople)).catch(() => undefined);
     } catch (saveError: any) {
       console.error("Error saving person:", saveError);
       Alert.alert('Erreur de sauvegarde', saveError?.message || 'Une erreur est survenue lors de l\'enregistrement.');
@@ -1759,6 +1761,7 @@ export default function CercleScreen() {
     setDraftFeedback(null);
     await queryClient.invalidateQueries({ queryKey: ['people'] });
     await queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    void listPeople(db).then((nextPeople) => syncAllBirthdayRemindersAsync(db, nextPeople)).catch(() => undefined);
   };
 
   const refreshPersonRelations = async () => {
@@ -3926,10 +3929,14 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
   },
   networkCenterInner: {
     alignItems: 'center',
-    backgroundColor: '#eca665',
+    backgroundColor: colors.accent,
     borderRadius: 20,
     height: 40,
     justifyContent: 'center',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
     width: 40,
   },
   networkCenterLabel: {

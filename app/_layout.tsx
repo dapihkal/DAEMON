@@ -17,13 +17,16 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { SkeletonScreen } from '../src/components/skeleton-screen';
-import { listObjectives, listRoutines } from '../src/db/repositories';
+import { UndoProvider } from '../src/components/undo-toast';
+import { listObjectives, listPeople, listRoutines } from '../src/db/repositories';
 import { migrateDbIfNeeded } from '../src/db/migrations';
 import {
   configureNotificationsAsync,
   syncRoutineNotificationsAsync,
   useNotificationObserver,
 } from '../src/lib/notifications';
+import { syncAllBirthdayRemindersAsync } from '../src/lib/birthday-reminders';
+import { runAutoBackupIfDueAsync } from '../src/lib/auto-backup';
 import { syncAllObjectiveDeadlineRemindersAsync } from '../src/lib/objective-deadline-reminders';
 import { getStoredPinAsync, subscribeToLockRequests, subscribeToPinChanges, verifyPinAsync, wipeAllDataAsync } from '../src/lib/security';
 import { ThemeProvider, useTheme, useThemePreferences } from '../src/theme/theme-provider';
@@ -53,19 +56,22 @@ function AppRuntime() {
     let active = true;
 
     void (async () => {
-      const [objectives, routines] = await Promise.all([
+      const [objectives, routines, people] = await Promise.all([
         listObjectives(db),
         listRoutines(db),
+        listPeople(db),
       ]);
       if (!active) {
         return;
       }
 
       await syncAllObjectiveDeadlineRemindersAsync(db, objectives);
+      await syncAllBirthdayRemindersAsync(db, people);
       await syncRoutineNotificationsAsync({
         routines,
         requestPermission: false,
       });
+      await runAutoBackupIfDueAsync(db);
     })();
 
     return () => {
@@ -412,7 +418,9 @@ function AppFrame() {
   return (
     <PinGate>
       <SQLiteProvider databaseName="carnet.db" onInit={migrateDbIfNeeded}>
-        <AppRuntime />
+        <UndoProvider>
+          <AppRuntime />
+        </UndoProvider>
       </SQLiteProvider>
     </PinGate>
   );

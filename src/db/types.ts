@@ -4,6 +4,8 @@ export interface Note {
   body: string;
   tags: string[];
   updatedAt: number;
+  pinned: boolean;
+  archived: boolean;
 }
 
 export interface ChecklistItem {

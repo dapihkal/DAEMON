@@ -4,7 +4,7 @@ import { defaultPersonCategories } from '../lib/person-categories';
 import { seedDatabaseIfNeeded } from './repositories';
 import { initDbEncryptionKey } from '../lib/db-crypto';
 
-const DATABASE_VERSION = 24;
+const DATABASE_VERSION = 25;
 
 async function getTableColumnNames(db: SQLiteDatabase, tableName: string) {
   const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${tableName})`);
@@ -804,6 +804,24 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     }
 
     currentVersion = 24;
+  }
+
+  if (currentVersion === 24) {
+    const noteColumns = await getTableColumnNames(db, 'notes');
+
+    if (!noteColumns.has('pinned')) {
+      await db.execAsync(`
+        ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+      `);
+    }
+
+    if (!noteColumns.has('archived')) {
+      await db.execAsync(`
+        ALTER TABLE notes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+      `);
+    }
+
+    currentVersion = 25;
   }
 
   await db.execAsync(`PRAGMA user_version = ${currentVersion}`);

@@ -51,6 +51,76 @@ function counter(label: string, count: number): [string, number] {
   return [label, count];
 }
 
+const MOOD_LABELS = ['', '😕 1/5', '😐 2/5', '🙂 3/5', '😀 4/5', '🤩 5/5'];
+
+function buildMarkdownExport(backup: Awaited<ReturnType<typeof exportMobileBackup>>) {
+  const lines: string[] = [];
+  const exportDay = backup.exportedAt.slice(0, 10);
+  lines.push(`# Carnet — export du ${exportDay}`, '');
+
+  const activeNotes = backup.notes.filter((note) => !note.archived);
+  const archivedNotes = backup.notes.filter((note) => note.archived);
+
+  if (activeNotes.length) {
+    lines.push('## Notes', '');
+    activeNotes.forEach((note) => {
+      lines.push(`### ${note.title}${note.pinned ? ' 📌' : ''}`);
+      if (note.tags.length) {
+        lines.push(`Tags : ${note.tags.map((tag) => `#${tag}`).join(' ')}`);
+      }
+      lines.push(`_Modifiée le ${new Date(note.updatedAt).toLocaleDateString('fr-FR')}_`, '');
+      if (note.body.trim()) {
+        lines.push(note.body.trim(), '');
+      }
+    });
+  }
+
+  if (archivedNotes.length) {
+    lines.push('## Notes archivées', '');
+    archivedNotes.forEach((note) => {
+      lines.push(`### ${note.title}`, '');
+      if (note.body.trim()) {
+        lines.push(note.body.trim(), '');
+      }
+    });
+  }
+
+  const journalEntries = backup.journal ?? [];
+  if (journalEntries.length) {
+    lines.push('## Journal', '');
+    [...journalEntries]
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .forEach((entry) => {
+        lines.push(`### ${new Date(`${entry.date}T12:00:00`).toLocaleDateString('fr-FR')} — ${MOOD_LABELS[entry.mood] ?? `${entry.mood}/5`}`);
+        if (entry.tags?.length) {
+          lines.push(`Tags : ${entry.tags.map((tag: string) => `#${tag}`).join(' ')}`);
+        }
+        lines.push('');
+        if (entry.text.trim()) {
+          lines.push(entry.text.trim(), '');
+        }
+      });
+  }
+
+  if (backup.people.length) {
+    lines.push('## Contacts', '');
+    backup.people.forEach((person) => {
+      lines.push(`### ${person.name}${person.favorite ? ' ★' : ''}`);
+      const details: string[] = [];
+      if (person.birthday) details.push(`Anniversaire : ${person.birthday}`);
+      if (person.phone) details.push(`Téléphone : ${person.phone}`);
+      if (person.address) details.push(`Adresse : ${person.address}`);
+      details.forEach((detail) => lines.push(`- ${detail}`));
+      if (person.note.trim()) {
+        lines.push('', person.note.trim());
+      }
+      lines.push('');
+    });
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
 function buildImportPreview(rawJson: string, password: string): ImportPreview {
   const unwrapped = unwrapEncryptedBackup(rawJson, password);
   const parsed = JSON.parse(unwrapped.rawJson) as unknown;
@@ -178,7 +248,7 @@ export default function SauvegardeScreen() {
   const { preferences, replacePreferences, updatePreferences } = useThemePreferences();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
-  const [busyAction, setBusyAction] = useState<'import' | 'export' | 'cloud' | null>(null);
+  const [busyAction, setBusyAction] = useState<'import' | 'export' | 'cloud' | 'markdown' | null>(null);
   const [pendingImport, setPendingImport] = useState<ImportPreview | null>(null);
   const [exportProfile, setExportProfile] = useState<ExportProfile>('complete');
   const [backupPassword, setBackupPassword] = useState('');
@@ -361,6 +431,43 @@ export default function SauvegardeScreen() {
     }
   };
 
+  const handleExportMarkdown = async () => {
+    setBusyAction('markdown');
+    setSyncFeedback(null);
+
+    try {
+      const backup = await exportMobileBackup(db);
+      const markdown = buildMarkdownExport(backup);
+      const file = new File(Paths.cache, `carnet-${backup.exportedAt.slice(0, 10)}.md`);
+
+      if (file.exists) {
+        file.delete();
+      }
+
+      file.create({ overwrite: true });
+      file.write(markdown);
+
+      if (!(await Sharing.isAvailableAsync())) {
+        setSyncFeedback('Export Markdown généré mais partage indisponible sur cet environnement.');
+        return;
+      }
+
+      await Sharing.shareAsync(file.uri, {
+        dialogTitle: 'Exporter le carnet en Markdown',
+        mimeType: 'text/markdown',
+        UTI: 'net.daringfireball.markdown',
+      });
+
+      setSyncFeedback('Notes, journal et contacts exportés en Markdown lisible.');
+    } catch (error) {
+      setSyncFeedback(
+        error instanceof Error ? error.message : 'Export Markdown impossible pour le moment.',
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <AppShell kicker="Sauvegarde" title="Import et export">
       <SectionTitle
@@ -413,7 +520,7 @@ export default function SauvegardeScreen() {
           <View style={styles.warningBox}>
             <Text style={styles.warningTitle}>⚠️ Message de vigilance</Text>
             <Text style={styles.warningText}>
-              Le stockage local signifie que vos données ne quittent jamais votre téléphone. Si vous perdez votre appareil, si celui-ci tombe en panne ou si l'application est désinstallée, l'intégralité de vos données sera définitivement perdue. Pensez à effectuer des exports réguliers.
+              Le stockage local signifie que vos données ne quittent jamais votre téléphone. Si vous perdez votre appareil, si celui-ci tombe en panne ou si l'application est désinstallée, l'intégralité de vos données sera définitivement perdue. Pensez à effectuer des exports réguliers. Une copie de sécurité automatique est tout de même conservée chaque semaine dans le stockage interne de l'app (4 dernières copies).
             </Text>
           </View>
         )}
@@ -489,6 +596,26 @@ export default function SauvegardeScreen() {
           </Pressable>
         </View>
         {syncFeedback ? <Text style={styles.syncFeedback}>{syncFeedback}</Text> : null}
+      </View>
+
+      <SectionTitle
+        eyebrow="Lecture"
+        title="Export Markdown"
+        subtitle="Un fichier .md lisible partout : notes, journal et contacts."
+      />
+      <View style={styles.securityCard}>
+        <Text style={styles.securityText}>
+          Contrairement au JSON, ce format est fait pour être relu ou imprimé, pas pour être réimporté.
+        </Text>
+        <Pressable
+          disabled={busyAction !== null}
+          onPress={handleExportMarkdown}
+          style={[styles.secondaryButton, busyAction !== null && styles.buttonDisabled]}
+        >
+          <Text style={styles.secondaryButtonLabel}>
+            {busyAction === 'markdown' ? 'Export en cours...' : 'Exporter en Markdown'}
+          </Text>
+        </Pressable>
       </View>
     </AppShell>
   );

@@ -711,6 +711,56 @@ export default function StatsScreen() {
       });
     }
 
+    const sleepWithActivity: number[] = [];
+    const sleepWithoutActivity: number[] = [];
+    recentDays.forEach((day) => {
+      const nights = sleepEntries.filter((s) => s.date === day.key).map((s) => s.quality);
+      if (!nights.length) {
+        return;
+      }
+      const quality = average(nights);
+      if (activeDays.has(day.key)) sleepWithActivity.push(quality);
+      else sleepWithoutActivity.push(quality);
+    });
+
+    if (sleepWithActivity.length >= 2 && sleepWithoutActivity.length >= 2) {
+      const avgWith = average(sleepWithActivity);
+      const avgWithout = average(sleepWithoutActivity);
+      insights.push({
+        label: 'Sommeil (soir de sport vs sans)',
+        value: `${avgWith.toFixed(1)} vs ${avgWithout.toFixed(1)}`,
+        delta: avgWith - avgWithout,
+        color: colors.success,
+      });
+    }
+
+    const moodAfterGoodNight: number[] = [];
+    const moodAfterBadNight: number[] = [];
+    recentDays.forEach((day) => {
+      const entry = journalEntries.find((j) => j.date === day.key);
+      if (!entry) {
+        return;
+      }
+      const previousDate = parseDay(day.key);
+      if (!previousDate) {
+        return;
+      }
+      const previousDay = localDay(addDays(previousDate, -1));
+      if (goodSleepDays.has(previousDay)) moodAfterGoodNight.push(entry.mood);
+      else if (badSleepDays.has(previousDay)) moodAfterBadNight.push(entry.mood);
+    });
+
+    if (moodAfterGoodNight.length >= 2 && moodAfterBadNight.length >= 2) {
+      const avgGood = average(moodAfterGoodNight);
+      const avgBad = average(moodAfterBadNight);
+      insights.push({
+        label: 'Humeur du lendemain (selon la nuit)',
+        value: `${avgGood.toFixed(1)} vs ${avgBad.toFixed(1)}`,
+        delta: avgGood - avgBad,
+        color: colors.accent,
+      });
+    }
+
     return insights.length > 0 ? insights : null;
   }, [activities, sleepEntries, journalEntries, recentDays, hasHealthTrendData, colors]);
 

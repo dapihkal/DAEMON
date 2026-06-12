@@ -53,6 +53,8 @@ type NoteRow = {
   body: string;
   tags_json: string;
   updated_at: number;
+  pinned: number;
+  archived: number;
 };
 
 type ChecklistRow = {
@@ -329,6 +331,8 @@ function mapNote(row: NoteRow): Note {
     body: decryptField(row.body),
     tags: parseTags(decryptField(row.tags_json)),
     updatedAt: row.updated_at,
+    pinned: row.pinned === 1,
+    archived: row.archived === 1,
   };
 }
 
@@ -860,7 +864,7 @@ export async function seedDatabaseIfNeeded(db: SQLiteDatabase) {
 }
 
 export async function listNotes(db: SQLiteDatabase) {
-  const rows = await db.getAllAsync<NoteRow>('SELECT * FROM notes ORDER BY updated_at DESC');
+  const rows = await db.getAllAsync<NoteRow>('SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC');
   return rows.map(mapNote);
 }
 
@@ -917,6 +921,27 @@ export async function saveNote(
 
   const row = await db.getFirstAsync<NoteRow>('SELECT * FROM notes WHERE id = ?', id);
   return row ? mapNote(row) : null;
+}
+
+export async function restoreNote(db: SQLiteDatabase, note: Note) {
+  await db.runAsync(
+    'INSERT OR REPLACE INTO notes (id, title, body, tags_json, updated_at, pinned, archived) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    note.id,
+    note.title,
+    note.body,
+    JSON.stringify(note.tags),
+    note.updatedAt,
+    note.pinned ? 1 : 0,
+    note.archived ? 1 : 0,
+  );
+}
+
+export async function setNotePinned(db: SQLiteDatabase, noteId: string, pinned: boolean) {
+  await db.runAsync('UPDATE notes SET pinned = ? WHERE id = ?', pinned ? 1 : 0, noteId);
+}
+
+export async function setNoteArchived(db: SQLiteDatabase, noteId: string, archived: boolean) {
+  await db.runAsync('UPDATE notes SET archived = ?, pinned = CASE WHEN ? THEN 0 ELSE pinned END WHERE id = ?', archived ? 1 : 0, archived ? 1 : 0, noteId);
 }
 
 export async function deleteNote(db: SQLiteDatabase, noteId: string) {
@@ -1149,6 +1174,43 @@ export async function toggleChecklistItem(db: SQLiteDatabase, itemId: string) {
 
 export async function deleteChecklistItem(db: SQLiteDatabase, itemId: string) {
   await db.runAsync('DELETE FROM list_items WHERE id = ?', itemId);
+}
+
+export async function restoreChecklistItem(
+  db: SQLiteDatabase,
+  checklistId: string,
+  item: ChecklistItem,
+) {
+  await db.runAsync(
+    'INSERT OR REPLACE INTO list_items (id, list_id, text, done, position) VALUES (?, ?, ?, ?, ?)',
+    item.id,
+    checklistId,
+    item.text,
+    item.done ? 1 : 0,
+    item.position,
+  );
+}
+
+export async function restoreChecklist(db: SQLiteDatabase, checklist: Checklist) {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      'INSERT OR REPLACE INTO lists (id, name, position) VALUES (?, ?, ?)',
+      checklist.id,
+      checklist.name,
+      checklist.position,
+    );
+
+    for (const item of checklist.items) {
+      await db.runAsync(
+        'INSERT OR REPLACE INTO list_items (id, list_id, text, done, position) VALUES (?, ?, ?, ?, ?)',
+        item.id,
+        checklist.id,
+        item.text,
+        item.done ? 1 : 0,
+        item.position,
+      );
+    }
+  });
 }
 
 export async function listPeople(db: SQLiteDatabase) {
@@ -1445,14 +1507,22 @@ export async function saveReminder(
 
   if (input.id) {
     await db.runAsync(
-      'UPDATE reminders SET title = ?, scheduled_for = ?, status = ?, notification_id = ?, repeat_rule = ?, category = ? WHERE id = ?',
+      `INSERT INTO reminders (id, title, scheduled_for, status, notification_id, repeat_rule, category)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         scheduled_for = excluded.scheduled_for,
+         status = excluded.status,
+         notification_id = excluded.notification_id,
+         repeat_rule = excluded.repeat_rule,
+         category = excluded.category`,
+      reminder.id,
       reminder.title,
       reminder.scheduledFor,
       reminder.status,
       reminder.notificationId,
       reminder.repeatRule,
       reminder.category,
-      reminder.id,
     );
 
     return reminder;
@@ -1474,6 +1544,19 @@ export async function saveReminder(
 
 export async function deleteReminder(db: SQLiteDatabase, reminderId: string) {
   await db.runAsync('DELETE FROM reminders WHERE id = ?', reminderId);
+}
+
+export async function restoreReminder(db: SQLiteDatabase, reminder: Reminder) {
+  await db.runAsync(
+    'INSERT OR REPLACE INTO reminders (id, title, scheduled_for, status, notification_id, repeat_rule, category) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    reminder.id,
+    reminder.title,
+    reminder.scheduledFor,
+    reminder.status,
+    null,
+    reminder.repeatRule,
+    reminder.category,
+  );
 }
 
 export async function postponeReminder(db: SQLiteDatabase, reminderId: string, hours: number) {
