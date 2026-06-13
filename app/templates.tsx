@@ -10,6 +10,7 @@ import { deleteTemplate, listTemplates, saveTemplate } from '../src/db/repositor
 import type { Template } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type TemplateDraft = {
   id: string | null;
@@ -37,7 +38,7 @@ export default function TemplatesScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const params = useLocalSearchParams<{ templateId?: string }>();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [draft, setDraft] = useState<TemplateDraft | null>(null);

@@ -12,6 +12,7 @@ import { cycleProjectStatus, deleteProject, getProject, listPeople, listProjects
 import type { Person, Project, ProjectStatus } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type ProjectDraft = {
   id: string | null;
@@ -66,7 +67,7 @@ export default function ProScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const projectStatuses = useMemo<Array<{ id: ProjectStatus; label: string; color: string }>>(() => [
     { id: 'prospect', label: 'Prospect', color: '#a87bff' },

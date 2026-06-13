@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View, Switch, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
@@ -8,6 +8,7 @@ import type { AppPinRelockDelay } from '../src/db/types';
 import { clearPinAsync, getStoredPinAsync, requestAppLock, savePinAsync, isBiometricsAvailableAsync, wipeAllDataAsync } from '../src/lib/security';
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 const pinRelockDelayOptions: Array<{ id: AppPinRelockDelay; label: string; description: string }> = [
   { id: 'immediate', label: 'Immédiat', description: 'Verrouille dès que l\'app quitte le premier plan.' },
@@ -16,20 +17,47 @@ const pinRelockDelayOptions: Array<{ id: AppPinRelockDelay; label: string; descr
   { id: 'never', label: 'Manuel', description: 'Verrouillage uniquement depuis le bouton.' },
 ];
 
+/** Détecte les PIN triviaux : chiffres identiques, suites croissantes/décroissantes. */
+const isWeakPin = (pin: string): boolean => {
+  if (/^(\d)\1+$/.test(pin)) return true; // 0000, 111111…
+  const digits = pin.split('').map(Number);
+  const ascending = digits.every((d, i) => i === 0 || d === (digits[i - 1] + 1) % 10);
+  const descending = digits.every((d, i) => i === 0 || d === (digits[i - 1] + 9) % 10);
+  return ascending || descending; // 1234, 9876, 8901…
+};
+
+type Feedback = { text: string; kind: 'success' | 'error' } | null;
+
 export default function SecurityScreen() {
   const { colors } = useTheme();
   const { preferences, updatePreferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [storedPin, setStoredPin] = useState<string | null>(null);
   const [draftPin, setDraftPin] = useState('');
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [confirmPin, setConfirmPin] = useState('');
+  const [feedback, setFeedbackState] = useState<Feedback>(null);
   const [biometricsAvailable, setBiometricsAvailable] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const setFeedback = useCallback((next: Feedback) => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    setFeedbackState(next);
+    if (next?.kind === 'success') {
+      feedbackTimer.current = setTimeout(() => setFeedbackState(null), 4000);
+    }
+  }, []);
 
   useEffect(() => {
+    let active = true;
     void (async () => {
       const available = await isBiometricsAvailableAsync();
-      setBiometricsAvailable(available);
+      if (active) setBiometricsAvailable(available);
     })();
+    return () => {
+      active = false;
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    };
   }, []);
 
   const refresh = useCallback(() => {
@@ -50,36 +78,123 @@ export default function SecurityScreen() {
   useFocusEffect(refresh);
 
   const handleSavePin = async () => {
+    if (busy) return;
+
     if (!/^\d{4,8}$/.test(draftPin)) {
-      setFeedback('Entre un PIN de 4 à 8 chiffres.');
+      setFeedback({ text: 'Entre un PIN de 4 à 8 chiffres.', kind: 'error' });
+      return;
+    }
+    if (draftPin !== confirmPin) {
+      setFeedback({ text: 'Les deux saisies ne correspondent pas.', kind: 'error' });
+      return;
+    }
+    if (draftPin === storedPin) {
+      setFeedback({ text: 'Ce PIN est déjà celui en place.', kind: 'error' });
       return;
     }
 
-    await savePinAsync(draftPin);
-    setDraftPin('');
-    setStoredPin(await getStoredPinAsync());
-    setFeedback('PIN local activé.');
+    const save = async () => {
+      setBusy(true);
+      try {
+        await savePinAsync(draftPin);
+        setDraftPin('');
+        setConfirmPin('');
+        setStoredPin(await getStoredPinAsync());
+        setFeedback({ text: storedPin ? 'PIN mis à jour.' : 'PIN local activé.', kind: 'success' });
+      } catch {
+        setFeedback({ text: 'Impossible d\'enregistrer le PIN. Réessaie.', kind: 'error' });
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    if (isWeakPin(draftPin)) {
+      Alert.alert(
+        'PIN facile à deviner',
+        'Ce code est une suite ou une répétition (ex. 1234, 0000). Il sera essayé en premier par quiconque accède à ton téléphone. Le garder quand même ?',
+        [
+          { text: 'Choisir un autre', style: 'cancel' },
+          { text: 'Garder ce PIN', style: 'destructive', onPress: () => void save() },
+        ]
+      );
+      return;
+    }
+
+    await save();
   };
 
-  const handleClearPin = async () => {
-    await clearPinAsync();
-    setStoredPin(null);
-    setDraftPin('');
-    setFeedback('PIN retiré.');
+  const handleClearPin = () => {
+    if (busy) return;
+
+    const autoWipeActive = preferences.wipeDataAfterFailedAttempts !== null;
+    Alert.alert(
+      'Désactiver le PIN ?',
+      autoWipeActive
+        ? 'L\'app s\'ouvrira sans authentification. La biométrie et l\'auto-destruction seront aussi désactivées puisqu\'elles dépendent du PIN.'
+        : 'L\'app s\'ouvrira sans authentification. La biométrie sera aussi désactivée.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Désactiver',
+          style: 'destructive',
+          onPress: async () => {
+            setBusy(true);
+            try {
+              await clearPinAsync();
+              updatePreferences({ useBiometrics: false, wipeDataAfterFailedAttempts: null });
+              setStoredPin(null);
+              setDraftPin('');
+              setConfirmPin('');
+              setFeedback({ text: 'PIN retiré.', kind: 'success' });
+            } catch {
+              setFeedback({ text: 'Impossible de retirer le PIN. Réessaie.', kind: 'error' });
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleWipeData = () => {
+    if (busy) return;
+
     Alert.alert(
       'Remise à zéro',
       'Es-tu vraiment sûr de vouloir effacer toutes les données locales ? Cette action est irréversible et supprimera tout ton historique, tes réglages et tes fichiers.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Tout effacer',
+          text: 'Continuer',
           style: 'destructive',
-          onPress: async () => {
-            await wipeAllDataAsync();
-            setFeedback('Toutes les données ont été effacées.');
+          onPress: () => {
+            // Seconde confirmation : l'action est irréversible et facile à déclencher par erreur.
+            Alert.alert(
+              'Dernière confirmation',
+              'Toutes les données seront définitivement perdues, sans possibilité de récupération.',
+              [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                  text: 'Tout effacer',
+                  style: 'destructive',
+                  onPress: async () => {
+                    setBusy(true);
+                    try {
+                      await wipeAllDataAsync();
+                      setStoredPin(null);
+                      setDraftPin('');
+                      setConfirmPin('');
+                      setFeedback({ text: 'Toutes les données ont été effacées.', kind: 'success' });
+                    } catch {
+                      setFeedback({ text: 'L\'effacement a échoué. Réessaie.', kind: 'error' });
+                    } finally {
+                      setBusy(false);
+                    }
+                  },
+                },
+              ]
+            );
           },
         },
       ]
@@ -103,6 +218,8 @@ export default function SecurityScreen() {
           {storedPin ? 'Un code PIN est configuré sur cet appareil.' : 'Aucun code PIN défini pour le moment.'}
         </Text>
         <TextInput
+          accessibilityLabel="Nouveau code PIN"
+          autoComplete="off"
           keyboardType="number-pad"
           maxLength={8}
           onChangeText={(value) => {
@@ -113,19 +230,54 @@ export default function SecurityScreen() {
           placeholderTextColor={colors.muted}
           secureTextEntry
           style={styles.input}
+          textContentType="oneTimeCode"
           value={draftPin}
         />
+        {draftPin.length > 0 && (
+          <TextInput
+            accessibilityLabel="Confirmation du code PIN"
+            autoComplete="off"
+            keyboardType="number-pad"
+            maxLength={8}
+            onChangeText={(value) => {
+              setConfirmPin(value.replace(/\D/g, ''));
+              setFeedback(null);
+            }}
+            placeholder="Confirme le code"
+            placeholderTextColor={colors.muted}
+            secureTextEntry
+            style={styles.input}
+            textContentType="oneTimeCode"
+            value={confirmPin}
+          />
+        )}
         <View style={styles.buttonRow}>
-          <Pressable onPress={handleSavePin} style={styles.primaryButton}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: busy }}
+            disabled={busy}
+            onPress={handleSavePin}
+            style={[styles.primaryButton, busy && styles.buttonDisabled]}
+          >
             <Text style={styles.primaryButtonLabel}>{storedPin ? 'Modifier' : 'Activer'}</Text>
           </Pressable>
           {storedPin && (
-            <Pressable onPress={handleClearPin} style={styles.secondaryButton}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={handleClearPin}
+              style={[styles.secondaryButton, busy && styles.buttonDisabled]}
+            >
               <Text style={styles.secondaryButtonLabel}>Désactiver</Text>
             </Pressable>
           )}
         </View>
-        {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
+        {feedback ? (
+          <Text style={[styles.feedbackText, feedback.kind === 'error' && styles.feedbackError]}>
+            {feedback.text}
+          </Text>
+        ) : null}
       </View>
 
       {biometricsAvailable && (
@@ -133,6 +285,7 @@ export default function SecurityScreen() {
           <View style={styles.headerRow}>
             <Text style={styles.cardTitle}>Biométrie</Text>
             <Switch
+              accessibilityLabel="Déverrouillage biométrique"
               disabled={!storedPin}
               onValueChange={(value) => updatePreferences({ useBiometrics: value })}
               trackColor={{ false: colors.line, true: colors.accent }}
@@ -157,14 +310,27 @@ export default function SecurityScreen() {
       />
 
       <View style={styles.securityCard}>
+        {!storedPin && (
+          <Text style={styles.warningText}>
+            Cette option nécessite un code PIN actif : elle se déclenche sur les codes erronés.
+          </Text>
+        )}
         <View style={styles.profileList}>
           {[null, 5, 10, 20].map((count) => {
             const selected = preferences.wipeDataAfterFailedAttempts === count;
+            const disabled = !storedPin && count !== null;
             return (
               <Pressable
+                accessibilityRole="radio"
+                accessibilityState={{ selected, disabled }}
+                disabled={disabled}
                 key={String(count)}
                 onPress={() => updatePreferences({ wipeDataAfterFailedAttempts: count })}
-                style={[styles.optionCard, selected && styles.optionCardSelected]}
+                style={[
+                  styles.optionCard,
+                  selected && styles.optionCardSelected,
+                  disabled && styles.optionCardDisabled,
+                ]}
               >
                 <View style={styles.optionHeader}>
                   <Text style={[styles.optionLabel, selected && styles.optionLabelSelected]}>
@@ -185,7 +351,7 @@ export default function SecurityScreen() {
           <View style={styles.warningBox}>
             <Text style={styles.warningTitle}>⚠️ Attention</Text>
             <Text style={styles.warningText}>
-              Cette option est radicale. Assurez-vous d'avoir des sauvegardes régulières si vous l'activez.
+              Cette option est radicale. Assure-toi d'avoir des sauvegardes régulières si tu l'actives.
             </Text>
           </View>
         )}
@@ -202,6 +368,8 @@ export default function SecurityScreen() {
           const selected = preferences.pinRelockDelay === option.id;
           return (
             <Pressable
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
               key={option.id}
               onPress={() => updatePreferences({ pinRelockDelay: option.id })}
               style={[styles.optionCard, selected && styles.optionCardSelected]}
@@ -220,7 +388,7 @@ export default function SecurityScreen() {
 
       {storedPin ? (
         <View style={{ marginTop: spacing.xl, paddingHorizontal: spacing.md }}>
-          <Pressable onPress={requestAppLock} style={styles.lockNowButton}>
+          <Pressable accessibilityRole="button" onPress={requestAppLock} style={styles.lockNowButton}>
             <Text style={styles.lockNowLabel}>Verrouiller immédiatement</Text>
           </Pressable>
         </View>
@@ -233,7 +401,13 @@ export default function SecurityScreen() {
       />
 
       <View style={{ marginBottom: spacing.xl, paddingHorizontal: spacing.md }}>
-        <Pressable onPress={handleWipeData} style={styles.dangerButton}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
+          onPress={handleWipeData}
+          style={[styles.dangerButton, busy && styles.buttonDisabled]}
+        >
           <Text style={styles.dangerButtonLabel}>Remettre à zéro le stockage local</Text>
         </Pressable>
       </View>
@@ -290,6 +464,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     marginTop: spacing.xs,
     textAlign: 'center',
   },
+  feedbackError: {
+    color: colors.warning,
+  },
   warningText: {
     color: colors.warning,
     fontSize: 12,
@@ -311,6 +488,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
   primaryButton: {
     alignItems: 'center',
@@ -385,6 +565,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
   optionCardSelected: {
     backgroundColor: colors.accentSoft,
     borderColor: colors.accent,
+  },
+  optionCardDisabled: {
+    opacity: 0.45,
   },
   optionHeader: {
     flexDirection: 'row',

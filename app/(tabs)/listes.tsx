@@ -23,6 +23,7 @@ import type { Checklist, ChecklistSummary } from '../../src/db/types';
 import { confirmationHaptic, deletionHaptic, selectionHaptic, toggleHaptic } from '../../src/lib/haptics';
 import { useTheme, useThemePreferences } from '../../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../../src/theme/tokens';
+import { useThemedStyles } from '../../src/theme/use-themed-styles';
 
 export default function ListesScreen() {
   const db = useSQLiteContext();
@@ -30,7 +31,7 @@ export default function ListesScreen() {
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
   const { showUndo } = useUndo();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const params = useLocalSearchParams<{ listId?: string }>();
   const [lists, setLists] = useState<ChecklistSummary[]>([]);
   const [activeList, setActiveList] = useState<Checklist | null>(null);

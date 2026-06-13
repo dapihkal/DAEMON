@@ -14,6 +14,7 @@ import type { Idea, IdeaStatus, IdeaSubtask, Person, Template } from '../src/db/
 import { ideaStatusOptions } from '../src/lib/module-options';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type IdeaDraft = {
   id: string | null;
@@ -61,7 +62,7 @@ export default function IdeesScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ ideaId?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);

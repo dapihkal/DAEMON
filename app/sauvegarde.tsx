@@ -21,6 +21,7 @@ import {
 import { savePinAsync } from '../src/lib/security';
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type ExportProfile = 'complete' | 'essential' | 'no-sensitive';
 
@@ -246,7 +247,7 @@ export default function SauvegardeScreen() {
   const db = useSQLiteContext();
   const { colors } = useTheme();
   const { preferences, replacePreferences, updatePreferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<'import' | 'export' | 'cloud' | 'markdown' | null>(null);
   const [pendingImport, setPendingImport] = useState<ImportPreview | null>(null);

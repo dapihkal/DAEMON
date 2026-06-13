@@ -23,6 +23,7 @@ import { useTheme } from '../src/theme/theme-provider';
 import { selectionHaptic } from '../src/lib/haptics';
 import { fonts, radii, spacing } from '../src/theme/tokens';
 import { MOOD_COLORS, getMoodColor } from '../src/theme/score-colors';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 const MOODS = ['😕', '😐', '🙂', '😀', '🤩'] as const;
 
@@ -100,7 +101,7 @@ export default function JournalScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const queryClient = useQueryClient();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const scrollRef = useRef<ScrollView>(null);
   const [editingDate, setEditingDate] = useState(localDay());
 

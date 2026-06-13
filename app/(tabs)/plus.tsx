@@ -5,12 +5,13 @@ import { type Href, useRouter } from 'expo-router';
 import { AppShell } from '../../src/components/app-shell';
 import { useTheme, useThemePreferences } from '../../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../../src/theme/tokens';
+import { useThemedStyles } from '../../src/theme/use-themed-styles';
 
 export default function PlusScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const friseHref = '/frise' as Href;
   const journalHref = '/journal' as Href;

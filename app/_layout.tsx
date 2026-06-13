@@ -32,6 +32,7 @@ import { getStoredPinAsync, subscribeToLockRequests, subscribeToPinChanges, veri
 import { ThemeProvider, useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
 import { useAppFonts } from '../src/theme/use-app-fonts';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type RelockDelay = 'never' | 'five' | 'minute' | string;
 
@@ -114,7 +115,7 @@ function AppRuntime() {
 function PinGate({ children }: { children: ReactNode }) {
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const backgroundAtRef = useRef<number | null>(null);
   const storedPinRef = useRef<string | null>(null);

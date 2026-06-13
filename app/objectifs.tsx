@@ -22,6 +22,7 @@ import {
 import type { Objective, ObjectiveEvent, ObjectiveScope } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type ObjectiveDraft = {
   id: string | null;
@@ -105,7 +106,7 @@ export default function ObjectifsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ objectiveId?: string, add?: string, date?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [objectives, setObjectives] = useState<Objective[]>([]);
   const [draft, setDraft] = useState<ObjectiveDraft | null>(null);
   const [successTitle, setSuccessTitle] = useState<string | null>(null);

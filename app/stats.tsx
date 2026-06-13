@@ -58,6 +58,7 @@ import { ideaStatusOptions, substanceCategoryOptions } from '../src/lib/module-o
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
 import { getMoodColor, getInterpolatedMoodColor } from '../src/theme/score-colors';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 const RANGE_OPTIONS = [
   { label: '7j', value: 7 },
@@ -208,7 +209,7 @@ function getNextBirthdayTime(birthday: string) {
 
 function StatBar({ label, value, max, color, suffix }: { label: string; value: number; max: number; color: string; suffix?: string }) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const width = max > 0 ? Math.max(6, Math.round((value / max) * 100)) : 0;
 
   return (
@@ -226,7 +227,7 @@ function StatBar({ label, value, max, color, suffix }: { label: string; value: n
 
 function TrendCard({ id, title, value, detail, points, color, onPress }: TrendCardProps & { onPress?: () => void }) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const max = Math.max(1, ...points.map((point) => point.value));
   const barGap = points.length > 180 ? 0 : points.length > 60 ? 1 : 4;
   const barMaxWidth = points.length > 180 ? 4 : points.length > 60 ? 8 : 12;
@@ -277,7 +278,7 @@ type DetailModalProps = {
 
 function DetailModal({ visible, onClose, title, subtitle, items }: DetailModalProps) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   return (
     <Modal animationType="fade" transparent visible={visible} onRequestClose={onClose}>
@@ -318,7 +319,7 @@ function DetailModal({ visible, onClose, title, subtitle, items }: DetailModalPr
 export default function StatsScreen() {
   const db = useSQLiteContext();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const [selectedMetric, setSelectedMetric] = useState<string | null>(null);
 

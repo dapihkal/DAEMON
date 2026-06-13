@@ -12,6 +12,7 @@ import { deletePhysicalActivity, listPhysicalActivities, savePhysicalActivity } 
 import type { PhysicalActivity } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type ActivityDraft = {
   id: string | null;
@@ -45,7 +46,7 @@ function parseDuration(value: string) {
 export default function ActiviteScreen() {
   const db = useSQLiteContext();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [activities, setActivities] = useState<PhysicalActivity[]>([]);
   const [draft, setDraft] = useState<ActivityDraft | null>(null);
 
@@ -128,10 +129,10 @@ export default function ActiviteScreen() {
       <FlashList
         data={activities}
         keyExtractor={(activity) => activity.id}
-        ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
-        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+        ItemSeparatorComponent={() => <View style={{ height: spacing.lg }} />}
+        contentContainerStyle={{ paddingBottom: spacing.xl }}
         ListHeaderComponent={(
-          <View style={{ gap: spacing.md, marginBottom: spacing.md, marginTop: spacing.md }}>
+          <View style={{ gap: spacing.lg, marginBottom: spacing.lg }}>
             <SectionTitle eyebrow="Séances" title="Suivi d'activité" subtitle="Durée, intensité, type de mouvement et notes après la séance." />
             <View style={styles.metricsGrid}>
               <View style={styles.metricTile}><Text style={styles.metricValue}>{stats.sessions}</Text><Text style={styles.metricLabel}>séances 7j</Text></View>

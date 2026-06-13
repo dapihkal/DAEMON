@@ -35,6 +35,7 @@ import {
 } from '../../src/lib/notifications';
 import { useTheme, useThemePreferences } from '../../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../../src/theme/tokens';
+import { useThemedStyles } from '../../src/theme/use-themed-styles';
 
 const repeatRuleLabels: Record<Reminder['repeatRule'], string | null> = {
   none: null,
@@ -126,7 +127,7 @@ export default function RemindersScreen() {
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
   const { showUndo } = useUndo();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const params = useLocalSearchParams<{ reminderId?: string; add?: string; date?: string }>();
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);

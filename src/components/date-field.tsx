@@ -11,7 +11,8 @@ type DateFieldProps = {
   allowClear?: boolean;
 };
 
-const weekDays = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+// Labels distincts : 'M'/'M' (mardi/mercredi) était ambigu.
+const weekDays = ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'];
 
 function localDay(value = new Date()) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -62,17 +63,30 @@ function formatMonth(date: Date) {
   });
 }
 
+function formatLongDate(date: Date) {
+  return date.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
 export function DateField({ label, value, onChange, allowClear = false }: DateFieldProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const selectedDate = parseDay(value);
-  const fallbackDate = selectedDate ?? new Date();
+
+  // Stabilisés sur `value` : tant que la valeur ne change pas, on ne recrée
+  // pas de new Date() à chaque render (l'effet ci-dessous reste fiable).
+  const selectedDate = useMemo(() => parseDay(value), [value]);
+  const fallbackDate = useMemo(() => selectedDate ?? new Date(), [selectedDate]);
+
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(fallbackDate));
 
   useEffect(() => {
     setVisibleMonth(startOfMonth(fallbackDate));
-  }, [fallbackDate.getFullYear(), fallbackDate.getMonth()]);
+  }, [fallbackDate]);
 
   const todayKey = localDay();
   const selectedKey = selectedDate ? localDay(selectedDate) : '';
@@ -98,24 +112,49 @@ export function DateField({ label, value, onChange, allowClear = false }: DateFi
     <View style={styles.root}>
       <Text style={styles.label}>{label}</Text>
       <View style={styles.controlRow}>
-        <Pressable onPress={() => moveDay(-1)} style={styles.stepButton}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Jour précédent"
+          onPress={() => moveDay(-1)}
+          style={styles.stepButton}
+        >
           <Text style={styles.stepButtonLabel}>-</Text>
         </Pressable>
-        <Pressable onPress={() => setCalendarOpen((current) => !current)} style={styles.valueButton}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={selectedDate ? `Date : ${formatLongDate(selectedDate)}. Ouvrir le calendrier` : 'Ouvrir le calendrier'}
+          onPress={() => setCalendarOpen((current) => !current)}
+          style={styles.valueButton}
+        >
           <Text numberOfLines={1} style={styles.valueLabel}>{formatDisplayDate(selectedDate)}</Text>
           <Text style={styles.valueMeta}>{value || 'Aucune date'}</Text>
         </Pressable>
-        <Pressable onPress={() => moveDay(1)} style={styles.stepButton}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Jour suivant"
+          onPress={() => moveDay(1)}
+          style={styles.stepButton}
+        >
           <Text style={styles.stepButtonLabel}>+</Text>
         </Pressable>
       </View>
 
       <View style={styles.quickRow}>
-        <Pressable onPress={() => selectDate(new Date())} style={styles.quickButton}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choisir aujourd'hui"
+          onPress={() => selectDate(new Date())}
+          style={styles.quickButton}
+        >
           <Text style={styles.quickButtonLabel}>Aujourd'hui</Text>
         </Pressable>
         {allowClear ? (
-          <Pressable onPress={() => onChange('')} style={styles.quickButton}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Effacer la date"
+            onPress={() => onChange('')}
+            style={styles.quickButton}
+          >
             <Text style={styles.quickButtonLabel}>Effacer</Text>
           </Pressable>
         ) : null}
@@ -125,19 +164,39 @@ export function DateField({ label, value, onChange, allowClear = false }: DateFi
         <View style={styles.calendar}>
           <View style={styles.monthRow}>
             <View style={styles.monthNavGroup}>
-              <Pressable onPress={() => setVisibleMonth((current) => new Date(current.getFullYear() - 1, current.getMonth(), 1, 12))} style={styles.monthButton}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Année précédente"
+                onPress={() => setVisibleMonth((current) => new Date(current.getFullYear() - 1, current.getMonth(), 1, 12))}
+                style={styles.monthButton}
+              >
                 <Text style={[styles.monthButtonLabel, styles.yearButtonLabel]}>{'<<'}</Text>
               </Pressable>
-              <Pressable onPress={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1, 12))} style={styles.monthButton}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Mois précédent"
+                onPress={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1, 12))}
+                style={styles.monthButton}
+              >
                 <Text style={styles.monthButtonLabel}>{'<'}</Text>
               </Pressable>
             </View>
             <Text style={styles.monthLabel}>{formatMonth(visibleMonth)}</Text>
             <View style={styles.monthNavGroup}>
-              <Pressable onPress={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1, 12))} style={styles.monthButton}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Mois suivant"
+                onPress={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1, 12))}
+                style={styles.monthButton}
+              >
                 <Text style={styles.monthButtonLabel}>{'>'}</Text>
               </Pressable>
-              <Pressable onPress={() => setVisibleMonth((current) => new Date(current.getFullYear() + 1, current.getMonth(), 1, 12))} style={styles.monthButton}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Année suivante"
+                onPress={() => setVisibleMonth((current) => new Date(current.getFullYear() + 1, current.getMonth(), 1, 12))}
+                style={styles.monthButton}
+              >
                 <Text style={[styles.monthButtonLabel, styles.yearButtonLabel]}>{'>>'}</Text>
               </Pressable>
             </View>
@@ -160,6 +219,9 @@ export function DateField({ label, value, onChange, allowClear = false }: DateFi
               return (
                 <Pressable
                   key={dayKey}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={formatLongDate(date)}
                   onPress={() => selectDate(date)}
                   style={[styles.dayCell, today && styles.dayCellToday, selected && styles.dayCellSelected]}
                 >

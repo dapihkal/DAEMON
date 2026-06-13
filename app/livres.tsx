@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -11,6 +11,7 @@ import { deleteBook, listBooks, saveBook } from '../src/db/repositories';
 import type { Book, BookStatus } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type BookDraft = {
   id: string | null;
@@ -22,6 +23,8 @@ type BookDraft = {
   notes: string;
   createdAt: number | null;
 };
+
+type SortKey = 'recent' | 'title' | 'rating';
 
 function createEmptyDraft(): BookDraft {
   return {
@@ -65,11 +68,17 @@ function formatDate(value: string) {
   });
 }
 
+const SORT_OPTIONS: Array<{ id: SortKey; label: string }> = [
+  { id: 'recent', label: 'Récents' },
+  { id: 'title', label: 'Titre' },
+  { id: 'rating', label: 'Note' },
+];
+
 export default function LivresScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const bookStatuses = useMemo<Array<{ id: BookStatus; label: string; color: string }>>(() => [
     { id: 'alire', label: 'À lire', color: '#a87bff' },
@@ -81,6 +90,8 @@ export default function LivresScreen() {
   const params = useLocalSearchParams<{ bookId?: string }>();
   const [books, setBooks] = useState<Book[]>([]);
   const [statusFilter, setStatusFilter] = useState<'all' | BookStatus>('all');
+  const [sortKey, setSortKey] = useState<SortKey>('recent');
+  const [search, setSearch] = useState('');
   const [draft, setDraft] = useState<BookDraft | null>(null);
 
   const refresh = useCallback(() => {
@@ -108,24 +119,57 @@ export default function LivresScreen() {
 
   useFocusEffect(refresh);
 
-  const filteredBooks = useMemo(
-    () => (statusFilter === 'all' ? books : books.filter((book) => book.status === statusFilter)),
-    [books, statusFilter],
-  );
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: books.length };
+    for (const book of books) {
+      counts[book.status] = (counts[book.status] ?? 0) + 1;
+    }
+    return counts;
+  }, [books]);
+
+  const visibleBooks = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    const filtered = books.filter((book) => {
+      const matchStatus = statusFilter === 'all' || book.status === statusFilter;
+      if (!matchStatus) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return (
+        book.name.toLowerCase().includes(query) ||
+        book.author.toLowerCase().includes(query)
+      );
+    });
+
+    const sorted = [...filtered];
+    if (sortKey === 'title') {
+      sorted.sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }));
+    } else if (sortKey === 'rating') {
+      sorted.sort((a, b) => b.rating - a.rating || (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    } else {
+      sorted.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    }
+
+    return sorted;
+  }, [books, statusFilter, sortKey, search]);
 
   const handleSave = async () => {
-    if (!draft?.name.trim()) {
+    const name = draft?.name.trim();
+    if (!draft || !name) {
       return;
     }
 
     await saveBook(db, {
       id: draft.id ?? undefined,
-      name: draft.name,
-      author: draft.author,
+      name,
+      author: draft.author.trim(),
       status: draft.status,
       rating: draft.rating,
       date: draft.date,
-      notes: draft.notes,
+      notes: draft.notes.trim(),
       createdAt: draft.createdAt ?? undefined,
     });
 
@@ -133,14 +177,27 @@ export default function LivresScreen() {
     setBooks(await listBooks(db));
   };
 
-  const handleDelete = async () => {
+  const confirmDelete = () => {
     if (!draft?.id) {
       return;
     }
 
-    await deleteBook(db, draft.id);
-    setDraft(null);
-    setBooks(await listBooks(db));
+    Alert.alert(
+      'Supprimer ce livre ?',
+      `« ${draft.name} » sera retiré de la bibliothèque.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteBook(db, draft.id as string);
+            setDraft(null);
+            setBooks(await listBooks(db));
+          },
+        },
+      ],
+    );
   };
 
   if (draft) {
@@ -222,7 +279,7 @@ export default function LivresScreen() {
               <Text style={styles.primaryButtonLabel}>Enregistrer</Text>
             </Pressable>
             {draft.id ? (
-              <Pressable onPress={handleDelete} style={styles.secondaryButton}>
+              <Pressable onPress={confirmDelete} style={styles.secondaryButton}>
                 <Text style={styles.secondaryButtonLabel}>Supprimer</Text>
               </Pressable>
             ) : null}
@@ -231,6 +288,11 @@ export default function LivresScreen() {
       </AppShell>
     );
   }
+
+  const filtersWithAll: Array<{ id: 'all' | BookStatus; label: string; color?: string }> = [
+    { id: 'all', label: 'Tous' },
+    ...bookStatuses,
+  ];
 
   return (
     <AppShell kicker="Lus" title="Livres">
@@ -244,22 +306,51 @@ export default function LivresScreen() {
         <Text style={styles.addButtonLabel}>+ Ajouter un livre</Text>
       </Pressable>
 
+      <TextInput
+        onChangeText={setSearch}
+        placeholder="Rechercher un titre ou un auteur"
+        placeholderTextColor={colors.muted}
+        style={styles.searchInput}
+        value={search}
+      />
+
       <View style={styles.filterRow}>
-        <Pressable onPress={() => setStatusFilter('all')} style={[styles.filterChip, statusFilter === 'all' && styles.filterChipSelected]}>
-          <Text style={[styles.filterChipLabel, statusFilter === 'all' && styles.filterChipLabelSelected]}>Tous</Text>
-        </Pressable>
-        {bookStatuses.map((status) => {
+        {filtersWithAll.map((status) => {
           const selected = statusFilter === status.id;
+          const count = statusCounts[status.id] ?? 0;
+          const accent = status.color ?? colors.accent;
           return (
-            <Pressable key={status.id} onPress={() => setStatusFilter(status.id)} style={[styles.filterChip, selected && { backgroundColor: status.color, borderColor: status.color }]}>
-              <Text style={[styles.filterChipLabel, selected && styles.filterChipLabelSelected]}>{status.label}</Text>
+            <Pressable
+              key={status.id}
+              onPress={() => setStatusFilter(status.id)}
+              style={[styles.filterChip, selected && { backgroundColor: accent, borderColor: accent }]}
+            >
+              <Text style={[styles.filterChipLabel, selected && styles.filterChipLabelSelected]}>
+                {status.label} · {count}
+              </Text>
             </Pressable>
           );
         })}
       </View>
 
-      {filteredBooks.length ? (
-        filteredBooks.map((book) => {
+      <View style={styles.sortRow}>
+        <Text style={styles.sortLabel}>Trier</Text>
+        {SORT_OPTIONS.map((option) => {
+          const selected = sortKey === option.id;
+          return (
+            <Pressable
+              key={option.id}
+              onPress={() => setSortKey(option.id)}
+              style={[styles.sortChip, selected && styles.sortChipSelected]}
+            >
+              <Text style={[styles.sortChipLabel, selected && styles.sortChipLabelSelected]}>{option.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {visibleBooks.length ? (
+        visibleBooks.map((book) => {
           const statusMeta = bookStatuses.find((status) => status.id === book.status) ?? bookStatuses[0];
 
           return (
@@ -280,7 +371,14 @@ export default function LivresScreen() {
           );
         })
       ) : (
-        <EmptyState title="Aucun livre" message="Ajoute une première lecture pour démarrer la bibliothèque." />
+        <EmptyState
+          title={search.trim() || statusFilter !== 'all' ? 'Aucun résultat' : 'Aucun livre'}
+          message={
+            search.trim() || statusFilter !== 'all'
+              ? 'Aucun livre ne correspond à ce filtre ou cette recherche.'
+              : 'Ajoute une première lecture pour démarrer la bibliothèque.'
+          }
+        />
       )}
     </AppShell>
   );
@@ -313,6 +411,17 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
   input: {
     backgroundColor: colors.surfaceMuted,
     borderRadius: radii.md,
+    color: colors.text,
+    fontFamily: fonts.body,
+    fontSize: 15,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  searchInput: {
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
     color: colors.text,
     fontFamily: fonts.body,
     fontSize: 15,
@@ -441,6 +550,39 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     fontSize: 12,
   },
   filterChipLabelSelected: {
+    color: colors.white,
+  },
+  sortRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  sortLabel: {
+    color: colors.muted,
+    fontFamily: fonts.bodySemi,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  sortChip: {
+    backgroundColor: colors.chip,
+    borderColor: colors.chip,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs ?? spacing.sm,
+  },
+  sortChipSelected: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  sortChipLabel: {
+    color: colors.text,
+    fontFamily: fonts.bodyBold,
+    fontSize: 12,
+  },
+  sortChipLabelSelected: {
     color: colors.white,
   },
   bookCard: {

@@ -12,6 +12,7 @@ import type { Dose, Substance, SubstanceCategory } from '../src/db/types';
 import { feelOptions, substanceCategoryOptions } from '../src/lib/module-options';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type SubstanceDraft = {
   id: string | null;
@@ -45,7 +46,7 @@ export default function PharmacoScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ substanceId?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [substances, setSubstances] = useState<Substance[]>([]);
   const [doses, setDoses] = useState<Dose[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<'all' | SubstanceCategory>('all');

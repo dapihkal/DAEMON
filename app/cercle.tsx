@@ -67,6 +67,7 @@ import type {
 } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 const networkSize = 440;
 const networkCenter = networkSize / 2;
@@ -818,7 +819,7 @@ export default function CercleScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const breathingTime = useSharedValue(0);
 

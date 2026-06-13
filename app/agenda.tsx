@@ -24,6 +24,7 @@ import {
 import type { Book, Concert, Idea, JournalEntry, Objective, Person, Project, Reminder, ReminderCategory, Routine, TimelineEntry, Treatment } from '../src/db/types';
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type AgendaEvent = {
   id: string;
@@ -34,6 +35,7 @@ type AgendaEvent = {
   subtitle: string;
   href: Href;
   treatmentId?: string;
+  dayKey?: string;
 };
 
 const weekDays = [
@@ -59,32 +61,6 @@ function getMonthLabel(date: Date) {
 
 function getDayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function getNextBirthdayIso(birthday: string) {
-  if (!birthday) {
-    return null;
-  }
-
-  const [year, month, day] = birthday.split('-').map(Number);
-  if (!month || !day) {
-    return null;
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  let next = new Date(today.getFullYear(), month - 1, day, 12, 0, 0, 0);
-  if (next.getTime() < today.getTime()) {
-    next = new Date(today.getFullYear() + 1, month - 1, day, 12, 0, 0, 0);
-  }
-
-  const age = year && year > 1900 ? next.getFullYear() - year : null;
-
-  return {
-    date: next.toISOString(),
-    age,
-  };
 }
 
 function formatEventTime(value: string) {
@@ -117,12 +93,80 @@ function localDay(value = new Date()) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
+const originLabels: Record<AgendaEvent['origin'], string> = {
+  manual: 'Rappels',
+  birthday: 'Anniversaires',
+  project: 'Projets',
+  objective: 'Objectifs',
+  idea: 'Idées',
+  timeline: 'Frise',
+  concert: 'Concerts',
+  routine: 'Routines',
+  treatment: 'Traitement',
+  journal: 'Journal',
+  book: 'Lectures',
+};
+
+function getBirthdayInMonth(birthday: string, monthStart: Date) {
+  if (!birthday) {
+    return null;
+  }
+
+  const [year, month, day] = birthday.split('-').map(Number);
+  if (!month || !day || month - 1 !== monthStart.getMonth()) {
+    return null;
+  }
+
+  const date = new Date(monthStart.getFullYear(), month - 1, day, 12, 0, 0, 0);
+  if (date.getMonth() !== month - 1) {
+    return null;
+  }
+
+  const age = year && year > 1900 ? date.getFullYear() - year : null;
+
+  return { date: date.toISOString(), age };
+}
+
+function expandReminderInMonth(scheduledFor: string, repeatRule: string, monthStart: Date) {
+  const base = new Date(scheduledFor);
+  const dayCount = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+  const occurrences: string[] = [];
+
+  for (let index = 0; index < dayCount; index += 1) {
+    const candidate = new Date(
+      monthStart.getFullYear(),
+      monthStart.getMonth(),
+      index + 1,
+      base.getHours(),
+      base.getMinutes(),
+      0,
+      0,
+    );
+
+    if (candidate.getTime() < base.getTime()) {
+      continue;
+    }
+
+    const matches =
+      (repeatRule === 'daily') ||
+      (repeatRule === 'weekly' && candidate.getDay() === base.getDay()) ||
+      (repeatRule === 'monthly' && candidate.getDate() === base.getDate()) ||
+      (repeatRule === 'yearly' && candidate.getDate() === base.getDate() && candidate.getMonth() === base.getMonth());
+
+    if (matches) {
+      occurrences.push(candidate.toISOString());
+    }
+  }
+
+  return occurrences;
+}
+
 export default function AgendaScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(new Date()));
   const [showAddModal, setShowAddModal] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -172,7 +216,14 @@ export default function AgendaScreen() {
     },
     [eventColors, preferences.agendaColors],
   );
-  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
+  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(() => getDayKey(new Date()));
+  const [hiddenOrigins, setHiddenOrigins] = useState<AgendaEvent['origin'][]>([]);
+
+  const toggleOrigin = useCallback((origin: AgendaEvent['origin']) => {
+    setHiddenOrigins((current) =>
+      current.includes(origin) ? current.filter((item) => item !== origin) : [...current, origin],
+    );
+  }, []);
 
   const refresh = useCallback(() => {
     let active = true;
@@ -231,29 +282,42 @@ export default function AgendaScreen() {
   const events = useMemo(() => {
     const reminderEvents: AgendaEvent[] = reminders
       .filter((reminder) => reminder.status === 'scheduled')
-      .map((reminder) => ({
-        id: reminder.id,
-        origin: 'manual',
-        category: reminder.category,
-        title: reminder.title,
-        datetime: reminder.scheduledFor,
-        subtitle: `${formatEventTime(reminder.scheduledFor)}${reminder.repeatRule !== 'none' ? ' · récurrent' : ''}`,
-        href: { pathname: '/rappels' as const, params: { reminderId: reminder.id } },
-      }));
+      .flatMap((reminder) => {
+        const occurrences =
+          reminder.repeatRule !== 'none'
+            ? expandReminderInMonth(reminder.scheduledFor, reminder.repeatRule, startOfMonth(visibleMonth))
+            : [];
+
+        if (!occurrences.length) {
+          occurrences.push(reminder.scheduledFor);
+        }
+
+        return occurrences.map((datetime, index) => ({
+          id: index === 0 ? reminder.id : `${reminder.id}-${getDayKey(new Date(datetime))}`,
+          origin: 'manual' as const,
+          category: reminder.category,
+          title: reminder.title,
+          datetime,
+          subtitle: `${formatEventTime(datetime)}${reminder.repeatRule !== 'none' ? ' · récurrent' : ''}`,
+          href: { pathname: '/rappels' as const, params: { reminderId: reminder.id } },
+        } satisfies AgendaEvent));
+      });
 
     const birthdayEvents: AgendaEvent[] = people.flatMap((person) => {
-      const nextBirthday = getNextBirthdayIso(person.birthday);
-      if (!nextBirthday) {
+      const birthdayInMonth = getBirthdayInMonth(person.birthday, startOfMonth(visibleMonth));
+      if (!birthdayInMonth) {
         return [];
       }
 
       return [
         {
-          id: `bday-${person.id}`,
+          id: `bday-${person.id}-${getDayKey(new Date(birthdayInMonth.date))}`,
           origin: 'birthday',
           title: `Anniversaire de ${person.name}`,
-          datetime: nextBirthday.date,
-          subtitle: nextBirthday.age ? `${formatEventDate(nextBirthday.date)} · ${nextBirthday.age} ans` : formatEventDate(nextBirthday.date),
+          datetime: birthdayInMonth.date,
+          subtitle: birthdayInMonth.age
+            ? `${formatEventDate(birthdayInMonth.date)} · ${birthdayInMonth.age} ans`
+            : formatEventDate(birthdayInMonth.date),
           href: { pathname: '/cercle' as const, params: { personId: person.id } },
         } satisfies AgendaEvent,
       ];
@@ -402,15 +466,32 @@ export default function AgendaScreen() {
     const treatmentEvents: AgendaEvent[] = preferences.showSensitiveContent
       ? treatments
           .filter((treatment) => treatment.name || treatment.dose)
-          .map((treatment) => ({
-            id: `treatment-${treatment.id}-${localDay()}`,
-            origin: 'treatment',
-            title: treatment.name || 'Traitement',
-            datetime: dateFromDay(localDay(), 9, 0).toISOString(),
-            subtitle: treatment.takenDays.includes(localDay()) ? 'Coché aujourd\'hui' : 'À cocher aujourd\'hui',
-            href: '/traitement' as const,
-            treatmentId: treatment.id,
-          }) satisfies AgendaEvent)
+          .flatMap((treatment) => {
+            const monthStart = startOfMonth(visibleMonth);
+            const monthDayCount = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+            const todayKey = localDay();
+
+            return Array.from({ length: monthDayCount }, (_, index) => {
+              const date = new Date(monthStart.getFullYear(), monthStart.getMonth(), index + 1, 12, 0, 0, 0);
+              return getDayKey(date);
+            })
+              .filter((dayKey) => dayKey <= todayKey)
+              .map((dayKey) => {
+                const taken = treatment.takenDays.includes(dayKey);
+                const subtitle = taken ? 'Pris' : dayKey === todayKey ? 'À cocher aujourd\'hui' : 'Manqué';
+
+                return {
+                  id: `treatment-${treatment.id}-${dayKey}`,
+                  origin: 'treatment' as const,
+                  title: treatment.name || 'Traitement',
+                  datetime: dateFromDay(dayKey, 9, 0).toISOString(),
+                  subtitle,
+                  href: '/traitement' as const,
+                  treatmentId: treatment.id,
+                  dayKey,
+                } satisfies AgendaEvent;
+              });
+          })
       : [];
 
     return [
@@ -434,10 +515,21 @@ export default function AgendaScreen() {
   const monthOffset = (firstDay.getDay() + 6) % 7;
   const dayCount = new Date(firstDay.getFullYear(), firstDay.getMonth() + 1, 0).getDate();
 
+  const availableOrigins = useMemo(() => {
+    const seen = new Set<AgendaEvent['origin']>();
+    for (const event of events) {
+      seen.add(event.origin);
+    }
+    return (Object.keys(originLabels) as AgendaEvent['origin'][]).filter((origin) => seen.has(origin));
+  }, [events]);
+
   const eventsByDay = useMemo(() => {
     const map = new Map<string, AgendaEvent[]>();
 
     for (const event of events) {
+      if (hiddenOrigins.includes(event.origin)) {
+        continue;
+      }
       const key = getDayKey(new Date(event.datetime));
       const bucket = map.get(key) ?? [];
       bucket.push(event);
@@ -445,39 +537,51 @@ export default function AgendaScreen() {
     }
 
     return map;
-  }, [events]);
+  }, [events, hiddenOrigins]);
 
   const selectedEvents = selectedDayKey ? eventsByDay.get(selectedDayKey) ?? [] : [];
 
   const handleQuickEventAction = async (event: AgendaEvent) => {
     if (event.origin === 'manual') {
-      await markReminderDone(db, event.id);
+      await markReminderDone(db, event.id.replace(/-\d{4}-\d{2}-\d{2}$/, ''));
       setReminders(await listReminders(db));
       return;
     }
 
-    if (event.origin === 'treatment' && event.treatmentId) {
+    if (event.origin === 'treatment' && event.treatmentId && event.dayKey === localDay()) {
       await toggleTreatmentDay(db, { treatmentId: event.treatmentId, day: localDay() });
       setTreatments(await listTreatments(db));
     }
   };
 
-  const calendarDays = Array.from({ length: dayCount }, (_, index) => {
-    const dayNumber = index + 1;
-    const date = new Date(firstDay.getFullYear(), firstDay.getMonth(), dayNumber, 12, 0, 0, 0);
-    const dayKey = getDayKey(date);
-    const dayEvents = eventsByDay.get(dayKey) ?? [];
-    const isToday = getDayKey(new Date()) === dayKey;
-    const isSelected = selectedDayKey === dayKey;
+  const todayKey = getDayKey(new Date());
 
-    return {
-      dayNumber,
-      dayKey,
-      dayEvents,
-      isToday,
-      isSelected,
-    };
-  });
+  const calendarDays = useMemo(
+    () =>
+      Array.from({ length: dayCount }, (_, index) => {
+        const dayNumber = index + 1;
+        const date = new Date(firstDay.getFullYear(), firstDay.getMonth(), dayNumber, 12, 0, 0, 0);
+        const dayKey = getDayKey(date);
+        const dayEvents = eventsByDay.get(dayKey) ?? [];
+
+        return {
+          dayNumber,
+          dayKey,
+          dayEvents,
+          isToday: todayKey === dayKey,
+          isSelected: selectedDayKey === dayKey,
+        };
+      }),
+    [dayCount, eventsByDay, firstDay, selectedDayKey, todayKey],
+  );
+
+  const isCurrentMonth =
+    visibleMonth.getFullYear() === new Date().getFullYear() && visibleMonth.getMonth() === new Date().getMonth();
+
+  const goToToday = useCallback(() => {
+    setVisibleMonth(startOfMonth(new Date()));
+    setSelectedDayKey(getDayKey(new Date()));
+  }, []);
 
   return (
     <AppShell 
@@ -549,6 +653,8 @@ export default function AgendaScreen() {
 
           {/* Floating Action Button */}
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Ajouter un élément"
             onPress={() => setShowAddModal(true)}
             style={({ pressed }) => [
               styles.fab,
@@ -569,25 +675,45 @@ export default function AgendaScreen() {
       <View style={styles.calendarCard}>
         <View style={styles.monthHeader}>
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Mois précédent"
             onPress={() => {
               setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1, 12));
               setSelectedDayKey(null);
             }}
-            style={styles.navButton}
+            style={({ pressed }) => [styles.navButton, pressed && styles.pressedSoft]}
           >
             <Text style={styles.navButtonLabel}>‹</Text>
           </Pressable>
-          <Text style={styles.monthTitle}>{getMonthLabel(visibleMonth)}</Text>
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Revenir au mois courant"
+            onPress={goToToday}
+          >
+            <Text style={styles.monthTitle}>{getMonthLabel(visibleMonth)}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Mois suivant"
             onPress={() => {
               setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1, 12));
               setSelectedDayKey(null);
             }}
-            style={styles.navButton}
+            style={({ pressed }) => [styles.navButton, pressed && styles.pressedSoft]}
           >
             <Text style={styles.navButtonLabel}>›</Text>
           </Pressable>
         </View>
+
+        {!isCurrentMonth ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={goToToday}
+            style={({ pressed }) => [styles.todayButton, pressed && styles.pressedSoft]}
+          >
+            <Text style={styles.todayButtonLabel}>Revenir à aujourd'hui</Text>
+          </Pressable>
+        ) : null}
 
         <View style={styles.weekRow}>
           {weekDays.map((day) => (
@@ -599,33 +725,66 @@ export default function AgendaScreen() {
           {Array.from({ length: monthOffset }).map((_, index) => (
             <View key={`empty-${index}`} style={styles.emptyCell} />
           ))}
-          {calendarDays.map((day) => (
-            <Pressable
-              key={day.dayKey}
-              onPress={() => setSelectedDayKey(day.dayKey)}
-              style={[
-                styles.dayCell,
-                day.isToday && styles.dayCellToday,
-                day.isSelected && styles.dayCellSelected,
-              ]}
-            >
-              <Text style={[styles.dayLabel, day.isSelected && styles.dayLabelSelected]}>{day.dayNumber}</Text>
-              <View style={styles.dotsRow}>
-                {[...new Set(day.dayEvents.map((event) => getEventColor(event)))].slice(0, 3).map((color, idx) => (
-                  <View key={idx} style={[styles.dot, { backgroundColor: color }]} />
-                ))}
-              </View>
-            </Pressable>
-          ))}
+          {calendarDays.map((day) => {
+            const dayColors = [...new Set(day.dayEvents.map((event) => getEventColor(event)))];
+
+            return (
+              <Pressable
+                key={day.dayKey}
+                accessibilityRole="button"
+                accessibilityLabel={`${day.dayNumber}, ${day.dayEvents.length} événement${day.dayEvents.length > 1 ? 's' : ''}`}
+                onPress={() => setSelectedDayKey(day.dayKey)}
+                style={[
+                  styles.dayCell,
+                  day.isToday && styles.dayCellToday,
+                  day.isSelected && styles.dayCellSelected,
+                ]}
+              >
+                <Text style={[styles.dayLabel, day.isSelected && styles.dayLabelSelected]}>{day.dayNumber}</Text>
+                <View style={styles.dotsRow}>
+                  {dayColors.slice(0, 3).map((color, idx) => (
+                    <View key={idx} style={[styles.dot, { backgroundColor: color }]} />
+                  ))}
+                  {dayColors.length > 3 ? (
+                    <Text style={[styles.dotMore, day.isSelected && styles.dayLabelSelected]}>+</Text>
+                  ) : null}
+                </View>
+              </Pressable>
+            );
+          })}
           {Array.from({ length: 6 }).map((_, index) => (
             <View key={`filler-${index}`} style={styles.emptyCell} />
           ))}
         </View>
       </View>
 
+      {availableOrigins.length > 1 ? (
+        <View style={styles.filtersRow}>
+          {availableOrigins.map((origin) => {
+            const hidden = hiddenOrigins.includes(origin);
+
+            return (
+              <Pressable
+                key={origin}
+                accessibilityRole="button"
+                accessibilityLabel={`${hidden ? 'Afficher' : 'Masquer'} ${originLabels[origin]}`}
+                onPress={() => toggleOrigin(origin)}
+                style={({ pressed }) => [styles.filterChip, hidden && styles.filterChipHidden, pressed && styles.pressedSoft]}
+              >
+                <View style={[styles.dot, { backgroundColor: hidden ? colors.muted : eventColors[origin] }]} />
+                <Text style={[styles.filterChipLabel, hidden && styles.filterChipLabelHidden]}>{originLabels[origin]}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+
       {selectedDayKey ? (
         <>
-          <Text style={styles.sectionLabel}>Le {new Date(`${selectedDayKey}T12:00:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}</Text>
+          <Text style={styles.sectionLabel}>
+            Le {new Date(`${selectedDayKey}T12:00:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}
+            {selectedEvents.length ? ` · ${selectedEvents.length} événement${selectedEvents.length > 1 ? 's' : ''}` : ''}
+          </Text>
           {selectedEvents.length ? (
             <View style={styles.eventsCard}>
               {selectedEvents.map((event, index) => (
@@ -638,8 +797,12 @@ export default function AgendaScreen() {
                     <Text style={styles.eventTitle}>{event.title}</Text>
                     <Text style={styles.eventMeta}>{event.subtitle}</Text>
                   </Pressable>
-                  {event.origin === 'manual' || event.origin === 'treatment' ? (
-                    <Pressable onPress={() => handleQuickEventAction(event)} style={({ pressed }) => [styles.eventActionButton, pressed && styles.pressedSoft]}>
+                  {event.origin === 'manual' || (event.origin === 'treatment' && event.dayKey === todayKey) ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => handleQuickEventAction(event)}
+                      style={({ pressed }) => [styles.eventActionButton, pressed && styles.pressedSoft]}
+                    >
                       <Text style={styles.eventActionLabel}>{event.origin === 'manual' ? 'Fait' : 'Cocher'}</Text>
                     </Pressable>
                   ) : null}
@@ -752,6 +915,51 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     borderRadius: 3,
     height: 6,
     width: 6,
+  },
+  dotMore: {
+    color: colors.muted,
+    fontFamily: fonts.bodyBold,
+    fontSize: 9,
+    lineHeight: 9,
+  },
+  todayButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: colors.chip,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  todayButtonLabel: {
+    color: colors.accent,
+    fontFamily: fonts.bodyBold,
+    fontSize: 12,
+  },
+  filtersRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  filterChip: {
+    alignItems: 'center',
+    backgroundColor: colors.chip,
+    borderRadius: radii.pill,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  filterChipHidden: {
+    opacity: 0.45,
+  },
+  filterChipLabel: {
+    color: colors.text,
+    fontFamily: fonts.bodySemi,
+    fontSize: 11,
+  },
+  filterChipLabelHidden: {
+    color: colors.muted,
+    textDecorationLine: 'line-through',
   },
   sectionLabel: {
     color: colors.accent,

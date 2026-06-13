@@ -12,6 +12,7 @@ import { listNotes, listProjects, listJournalEntries } from '../src/db/repositor
 import type { EntityRef, EntityTag, Idea, Note, Project, JournalEntry } from '../src/db/types';
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type TagTarget = {
   id: string;
@@ -37,7 +38,7 @@ export default function TagsScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const params = useLocalSearchParams<{ tag?: string }>();
   const [notes, setNotes] = useState<Note[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);

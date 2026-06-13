@@ -13,6 +13,7 @@ import { MOOD_COLORS, getMoodColor } from '../src/theme/score-colors';
 import { saveJournalEntry, listTreatments, saveBook } from '../src/db/repositories';
 import { saveSleepEntry, savePhysicalActivity, saveGame, saveCountry, saveConcert } from '../src/db/module-repositories';
 import type { SleepEntry, PhysicalActivity, Treatment, JournalEntry, GameStatus, CountryRegion, BookStatus } from '../src/db/types';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 function localDay(value = new Date()) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -25,7 +26,7 @@ export default function BilanScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const [selectedDate, setSelectedDate] = useState<string>(localDay());
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);

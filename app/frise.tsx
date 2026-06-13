@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useFocusEffect } from 'expo-router';
 
@@ -13,6 +13,7 @@ import { deleteTimelineEntry, listTimelineEntries, saveTimelineEntry } from '../
 import type { TimelineEntry } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 function localDay(value = new Date()) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -22,20 +23,25 @@ function formatTimelineDate(value: string) {
   return new Date(`${value}T12:00:00`).toLocaleDateString('fr-FR', {
     day: 'numeric',
     month: 'long',
-    year: 'numeric',
   });
+}
+
+function yearOf(value: string) {
+  return value.slice(0, 4);
 }
 
 export default function FriseScreen() {
   const db = useSQLiteContext();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [entries, setEntries] = useState<TimelineEntry[]>([]);
   const [draftDate, setDraftDate] = useState(localDay());
   const [draftTitle, setDraftTitle] = useState('');
   const [draftNote, setDraftNote] = useState('');
   const [draftPeople, setDraftPeople] = useState<string[]>([]);
+  const [peopleDirty, setPeopleDirty] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(() => {
     let active = true;
@@ -54,30 +60,70 @@ export default function FriseScreen() {
 
   useFocusEffect(refresh);
 
-  const handleSave = async () => {
-    const entry = await saveTimelineEntry(db, {
-      id: editingEntryId ?? undefined,
-      date: draftDate,
-      title: draftTitle,
-      note: draftNote,
-    });
-
-    if (!entry) {
-      return;
+  // Tri défensif (desc) + regroupement par année pour la lecture en frise.
+  const groupedEntries = useMemo(() => {
+    const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date));
+    const groups: { year: string; items: TimelineEntry[] }[] = [];
+    for (const entry of sorted) {
+      const year = yearOf(entry.date);
+      const last = groups[groups.length - 1];
+      if (last && last.year === year) {
+        last.items.push(entry);
+      } else {
+        groups.push({ year, items: [entry] });
+      }
     }
+    return groups;
+  }, [entries]);
 
-    await replaceEntityPersonLinks(db, {
-      entityKind: 'timeline',
-      entityId: entry.id,
-      personIds: draftPeople,
-    });
+  const canSave = draftTitle.trim().length > 0 && !saving;
 
+  const resetDraft = () => {
+    setEditingEntryId(null);
+    setDraftDate(localDay());
     setDraftTitle('');
     setDraftNote('');
-    setDraftDate(localDay());
     setDraftPeople([]);
-    setEditingEntryId(null);
-    setEntries(await listTimelineEntries(db));
+    setPeopleDirty(false);
+  };
+
+  const handlePeopleChange = (ids: string[]) => {
+    setDraftPeople(ids);
+    setPeopleDirty(true);
+  };
+
+  const handleSave = async () => {
+    if (!canSave) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const entry = await saveTimelineEntry(db, {
+        id: editingEntryId ?? undefined,
+        date: draftDate,
+        title: draftTitle.trim(),
+        note: draftNote.trim(),
+      });
+
+      if (!entry) {
+        return;
+      }
+
+      // En édition, ne remplacer les liens que s'ils ont été touchés :
+      // sinon une édition de titre/note effacerait les personnes liées.
+      if (!editingEntryId || peopleDirty) {
+        await replaceEntityPersonLinks(db, {
+          entityKind: 'timeline',
+          entityId: entry.id,
+          personIds: draftPeople,
+        });
+      }
+
+      resetDraft();
+      setEntries(await listTimelineEntries(db));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleEdit = (entry: TimelineEntry) => {
@@ -86,20 +132,31 @@ export default function FriseScreen() {
     setDraftTitle(entry.title);
     setDraftNote(entry.note);
     setDraftPeople([]);
+    setPeopleDirty(false);
   };
 
-  const handleCancelEdit = () => {
-    setEditingEntryId(null);
-    setDraftDate(localDay());
-    setDraftTitle('');
-    setDraftNote('');
-    setDraftPeople([]);
-  };
-
-  const handleDelete = async (entryId: string) => {
-    await replaceEntityPersonLinks(db, { entityKind: 'timeline', entityId: entryId, personIds: [] });
-    await deleteTimelineEntry(db, entryId);
-    setEntries(await listTimelineEntries(db));
+  const handleDelete = (entry: TimelineEntry) => {
+    Alert.alert('Supprimer cet événement ?', `« ${entry.title} » sera définitivement retiré de la frise.`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Supprimer',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            await replaceEntityPersonLinks(db, {
+              entityKind: 'timeline',
+              entityId: entry.id,
+              personIds: [],
+            });
+            await deleteTimelineEntry(db, entry.id);
+            if (editingEntryId === entry.id) {
+              resetDraft();
+            }
+            setEntries(await listTimelineEntries(db));
+          })();
+        },
+      },
+    ]);
   };
 
   return (
@@ -107,15 +164,21 @@ export default function FriseScreen() {
       <SectionTitle
         eyebrow="Chronologie"
         title="Moments clés"
-        subtitle="Ajout et modification d'événements datés, note optionnelle et lecture en frise chronologique descendante." 
+        subtitle={
+          entries.length
+            ? `${entries.length} événement${entries.length > 1 ? 's' : ''} sur la frise.`
+            : "Ajout et modification d'événements datés, note optionnelle et lecture en frise chronologique descendante."
+        }
       />
 
       <View style={styles.editorCard}>
+        {editingEntryId ? <Text style={styles.editingBadge}>Modification en cours</Text> : null}
         <DateField label="Date" value={draftDate} onChange={setDraftDate} />
         <TextInput
           onChangeText={setDraftTitle}
           placeholder="Moment marquant"
           placeholderTextColor={colors.muted}
+          returnKeyType="next"
           style={styles.input}
           value={draftTitle}
         />
@@ -132,44 +195,67 @@ export default function FriseScreen() {
           entityKind="timeline"
           entityId={editingEntryId}
           selectedIds={draftPeople}
-          onChange={setDraftPeople}
+          onChange={handlePeopleChange}
         />
         <View style={styles.buttonRow}>
-          <Pressable onPress={handleSave} style={styles.primaryButton}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={!canSave}
+            onPress={handleSave}
+            style={[styles.primaryButton, !canSave && styles.primaryButtonDisabled]}
+          >
             <Text style={styles.primaryButtonLabel}>{editingEntryId ? 'Enregistrer' : 'Ajouter'}</Text>
           </Pressable>
           {editingEntryId ? (
-            <Pressable onPress={handleCancelEdit} style={styles.secondaryButton}>
+            <Pressable accessibilityRole="button" onPress={resetDraft} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonLabel}>Annuler</Text>
             </Pressable>
           ) : null}
         </View>
       </View>
 
-      {entries.length ? (
-        entries.map((entry, index) => (
-          <View key={entry.id} style={styles.timelineRow}>
-            <View style={styles.timelineRail}>
-              <View style={styles.timelineDot} />
-              {index < entries.length - 1 ? <View style={styles.timelineLine} /> : null}
-            </View>
-            <View style={styles.entryCard}>
-              <View style={styles.entryHeader}>
-                <View style={styles.entryMain}>
-                  <Text style={styles.entryDate}>{formatTimelineDate(entry.date)}</Text>
-                  <Text style={styles.entryTitle}>{entry.title}</Text>
-                  {entry.note ? <Text style={styles.entryNote}>{entry.note}</Text> : null}
+      {groupedEntries.length ? (
+        groupedEntries.map((group, groupIndex) => (
+          <View key={group.year}>
+            <Text style={styles.yearHeader}>{group.year}</Text>
+            {group.items.map((entry, index) => {
+              const isLastOfAll =
+                groupIndex === groupedEntries.length - 1 && index === group.items.length - 1;
+              const isEditing = editingEntryId === entry.id;
+              return (
+                <View key={entry.id} style={styles.timelineRow}>
+                  <View style={styles.timelineRail}>
+                    <View style={styles.timelineDot} />
+                    {!isLastOfAll ? <View style={styles.timelineLine} /> : null}
+                  </View>
+                  <View style={[styles.entryCard, isEditing && styles.entryCardEditing]}>
+                    <View style={styles.entryHeader}>
+                      <View style={styles.entryMain}>
+                        <Text style={styles.entryDate}>{formatTimelineDate(entry.date)}</Text>
+                        <Text style={styles.entryTitle}>{entry.title}</Text>
+                        {entry.note ? <Text style={styles.entryNote}>{entry.note}</Text> : null}
+                      </View>
+                      <View style={styles.entryActions}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => handleEdit(entry)}
+                          style={styles.editChip}
+                        >
+                          <Text style={styles.editChipLabel}>Modifier</Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => handleDelete(entry)}
+                          style={styles.deleteChip}
+                        >
+                          <Text style={styles.deleteChipLabel}>Suppr.</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
                 </View>
-                <View style={styles.entryActions}>
-                  <Pressable onPress={() => handleEdit(entry)} style={styles.editChip}>
-                    <Text style={styles.editChipLabel}>Modifier</Text>
-                  </Pressable>
-                  <Pressable onPress={() => handleDelete(entry.id)} style={styles.deleteChip}>
-                    <Text style={styles.deleteChipLabel}>Suppr.</Text>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
+              );
+            })}
           </View>
         ))
       ) : (
@@ -188,6 +274,19 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       borderWidth: 1,
       gap: spacing.md,
       padding: spacing.lg,
+    },
+    editingBadge: {
+      alignSelf: 'flex-start',
+      backgroundColor: colors.accentSoft,
+      borderRadius: radii.pill,
+      color: colors.accent,
+      fontFamily: fonts.mono,
+      fontSize: 11,
+      letterSpacing: 0.8,
+      overflow: 'hidden',
+      paddingHorizontal: spacing.md,
+      paddingVertical: 4,
+      textTransform: 'uppercase',
     },
     input: {
       backgroundColor: colors.surfaceMuted,
@@ -215,6 +314,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flex: 1,
       paddingVertical: spacing.sm,
     },
+    primaryButtonDisabled: {
+      opacity: 0.4,
+    },
     primaryButtonLabel: {
       color: colors.white,
       fontFamily: fonts.bodyBold,
@@ -236,6 +338,15 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       color: colors.accent,
       fontFamily: fonts.bodyBold,
       fontSize: 15,
+    },
+    yearHeader: {
+      color: colors.muted,
+      fontFamily: fonts.mono,
+      fontSize: 12,
+      letterSpacing: 1.2,
+      marginBottom: spacing.sm,
+      marginLeft: 18 + 12,
+      marginTop: spacing.md,
     },
     timelineRow: {
       flexDirection: 'row',
@@ -266,6 +377,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flex: 1,
       marginBottom: spacing.md,
       padding: spacing.lg,
+    },
+    entryCardEditing: {
+      borderColor: colors.accent,
     },
     entryHeader: {
       gap: spacing.md,

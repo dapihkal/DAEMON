@@ -67,6 +67,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const theme = useMemo(() => buildTheme(resolvedTheme, preferences.accent), [preferences.accent, resolvedTheme]);
 
+  // Échelle de texte globale : appliquée à chaque rendu, de façon synchrone,
+  // AVANT que les enfants ne se rendent (le patch de <Text> lira donc la
+  // bonne valeur dans la même passe). Idempotent.
+
   const replacePreferences = useCallback(async (nextPreferences: AppPreferences) => {
     const sanitizedPreferences = sanitizeAppPreferences(nextPreferences);
     setPreferences(sanitizedPreferences);

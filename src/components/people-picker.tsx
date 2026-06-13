@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 
@@ -24,6 +24,14 @@ function normalizeSearchText(value: string) {
     .replace(/[\u0300-\u036f]/g, '')
     .toLocaleLowerCase('fr-FR')
     .trim();
+}
+
+// Recherche sur le nom + d'éventuels tags d'intérêt s'ils existent sur Person.
+// Accès défensif : si le champ n'est pas présent, on retombe sur le nom seul.
+function searchableText(person: Person) {
+  const raw = (person as Person & { tags?: string | string[] }).tags;
+  const tagText = Array.isArray(raw) ? raw.join(' ') : raw ?? '';
+  return normalizeSearchText(`${person.name} ${tagText}`);
 }
 
 export function PeoplePicker({
@@ -64,8 +72,13 @@ export function PeoplePicker({
     };
   }, [db, providedPeople]);
 
+  // Hydratation depuis la base : une seule fois par entityId, et seulement
+  // si on n'a pas déjà hydraté cet entity. Évite d'écraser une sélection
+  // faite localement par l'utilisateur (ou fournie par le parent).
+  const hydratedFor = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!entityId) {
+    if (!entityId || hydratedFor.current === entityId) {
       return undefined;
     }
 
@@ -75,6 +88,7 @@ export function PeoplePicker({
       const linkedPersonIds = await listEntityPersonIds(db, { entityKind, entityId });
 
       if (active) {
+        hydratedFor.current = entityId;
         onChange(linkedPersonIds);
       }
     })();
@@ -82,6 +96,8 @@ export function PeoplePicker({
     return () => {
       active = false;
     };
+    // onChange volontairement omis : il doit être stable (useCallback côté parent).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, entityId, entityKind]);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -100,7 +116,7 @@ export function PeoplePicker({
 
     return people
       .filter((person) => !selectedSet.has(person.id))
-      .filter((person) => normalizeSearchText(person.name).includes(query))
+      .filter((person) => searchableText(person).includes(query))
       .slice(0, 6);
   }, [people, searchText, selectedSet]);
 
@@ -137,9 +153,15 @@ export function PeoplePicker({
           {selectedPeople.length ? (
             <View style={styles.selectedWrap}>
               {selectedPeople.map((person) => (
-                <Pressable key={person.id} onPress={() => togglePerson(person.id)} style={styles.selectedChip}>
+                <Pressable
+                  key={person.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Retirer ${person.name}`}
+                  onPress={() => togglePerson(person.id)}
+                  style={styles.selectedChip}
+                >
                   <Text style={styles.selectedChipLabel}>{person.name}</Text>
-                  <Text style={styles.selectedChipRemove}>x</Text>
+                  <Text style={styles.selectedChipRemove}>×</Text>
                 </Pressable>
               ))}
             </View>
@@ -149,18 +171,24 @@ export function PeoplePicker({
             <View style={styles.suggestionList}>
               {suggestedPeople.length ? (
                 suggestedPeople.map((person) => (
-                  <Pressable key={person.id} onPress={() => handleSelect(person.id)} style={styles.suggestionRow}>
+                  <Pressable
+                    key={person.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ajouter ${person.name}`}
+                    onPress={() => handleSelect(person.id)}
+                    style={styles.suggestionRow}
+                  >
                     <Text style={styles.suggestionName}>{person.name}</Text>
                   </Pressable>
                 ))
               ) : (
-                <Text style={styles.emptyText}>Aucune personne trouvee.</Text>
+                <Text style={styles.emptyText}>Aucune personne trouvée.</Text>
               )}
             </View>
           ) : null}
         </View>
       ) : (
-        <Text style={styles.emptyText}>Ajoute d abord des personnes dans le Cercle.</Text>
+        <Text style={styles.emptyText}>Ajoute d'abord des personnes dans le Cercle.</Text>
       )}
     </View>
   );

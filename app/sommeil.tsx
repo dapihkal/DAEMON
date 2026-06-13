@@ -12,6 +12,7 @@ import type { SleepEntry } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
 import { MOOD_COLORS, getMoodColor } from '../src/theme/score-colors';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type SleepDraft = {
   id: string | null;
@@ -60,7 +61,7 @@ function average(values: number[]) {
 export default function SommeilScreen() {
   const db = useSQLiteContext();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [entries, setEntries] = useState<SleepEntry[]>([]);
   const [draft, setDraft] = useState<SleepDraft | null>(null);
 

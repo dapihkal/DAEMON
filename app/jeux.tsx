@@ -13,6 +13,7 @@ import { deleteGame, listGames, saveGame } from '../src/db/module-repositories';
 import type { Game, GameStatus } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type GameDraft = {
   id: string | null;
@@ -63,7 +64,7 @@ export default function JeuxScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ gameId?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const gameStatusOptions = useMemo<Array<{ id: GameStatus; label: string; color: string }>>(() => [
     { id: 'aplayer', label: 'À jouer', color: '#a87bff' },

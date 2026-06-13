@@ -14,6 +14,7 @@ import { deleteConcert, listConcerts, saveConcert } from '../src/db/module-repos
 import type { Concert } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type ConcertDraft = {
   id: string | null;
@@ -43,7 +44,7 @@ export default function ConcertsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ concertId?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [concerts, setConcerts] = useState<Concert[]>([]);
   const [draft, setDraft] = useState<ConcertDraft | null>(null);
 
@@ -115,10 +116,10 @@ export default function ConcertsScreen() {
       <FlashList
         data={concerts}
         keyExtractor={(concert) => concert.id}
-        ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
-        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+        ItemSeparatorComponent={() => <View style={{ height: spacing.lg }} />}
+        contentContainerStyle={{ paddingBottom: spacing.xl }}
         ListHeaderComponent={(
-          <View style={{ gap: spacing.md, marginBottom: spacing.md, marginTop: spacing.md }}>
+          <View style={{ gap: spacing.lg, marginBottom: spacing.lg }}>
             <SectionTitle eyebrow="Collection" title="Concerts vus en live" subtitle="Suivi des concerts avec lieu, date, note et commentaire." />
             <Pressable onPress={() => setDraft(createEmptyDraft())} style={({ pressed }) => [styles.addButton, pressed && styles.pressedCard]}><Text style={styles.addButtonLabel}>+ Ajouter un concert</Text></Pressable>
           </View>

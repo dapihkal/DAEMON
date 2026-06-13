@@ -23,6 +23,7 @@ import {
 import type { Treatment } from '../src/db/types';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type TreatmentDraft = {
   id: string | null;
@@ -163,7 +164,7 @@ function createDraft(treatment: Treatment | null, extras: TreatmentExtras | null
 export default function TraitementScreen() {
   const db = useSQLiteContext();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [extrasMap, setExtrasMap] = useState<Map<string, TreatmentExtras>>(new Map());
   const [draft, setDraft] = useState<TreatmentDraft | null>(null);

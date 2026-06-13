@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-import { advanceReminderDate, isDue, toIsoString } from '../lib/date';
+import { advanceReminderDate, isDue } from '../lib/date';
 import { createId } from '../lib/id';
 import { encryptField, decryptField } from '../lib/db-crypto';
 import {
@@ -756,15 +756,6 @@ export async function seedDatabaseIfNeeded(db: SQLiteDatabase) {
   }
 
   const now = Date.now();
-  const laterToday = new Date();
-  laterToday.setHours(20, 0, 0, 0);
-  if (laterToday.getTime() <= Date.now()) {
-    laterToday.setDate(laterToday.getDate() + 1);
-  }
-
-  const tomorrowMorning = new Date();
-  tomorrowMorning.setDate(tomorrowMorning.getDate() + 1);
-  tomorrowMorning.setHours(9, 0, 0, 0);
 
   await db.runAsync(
     'INSERT INTO notes (id, title, body, tags_json, updated_at) VALUES (?, ?, ?, ?, ?)',
@@ -773,35 +764,6 @@ export async function seedDatabaseIfNeeded(db: SQLiteDatabase) {
     encryptField('Cette application vous permet de centraliser vos notes, listes, tâches et suivis au quotidien en toute sécurité. Vos données restent locales et chiffrées.'),
     encryptField(JSON.stringify(['accueil'])),
     now,
-  );
-  await db.runAsync(
-    'INSERT INTO notes (id, title, body, tags_json, updated_at) VALUES (?, ?, ?, ?, ?)',
-    createId('note'),
-    encryptField('Conseils pour démarrer'),
-    encryptField('Vous pouvez ajouter de nouveaux modules depuis le dock en bas de l\'écran, personnaliser votre thème dans les réglages et configurer un code PIN pour sécuriser l\'accès.'),
-    encryptField(JSON.stringify(['guide'])),
-    now - 1000,
-  );
-
-  await db.runAsync(
-    'INSERT INTO reminders (id, title, scheduled_for, status, notification_id, repeat_rule, category) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    createId('rem'),
-    encryptField('Prendre un moment de pause'),
-    toIsoString(laterToday),
-    'scheduled',
-    null,
-    'none',
-    'rappel',
-  );
-  await db.runAsync(
-    'INSERT INTO reminders (id, title, scheduled_for, status, notification_id, repeat_rule, category) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    createId('rem'),
-    encryptField('Faire le bilan de la journée'),
-    toIsoString(tomorrowMorning),
-    'scheduled',
-    null,
-    'none',
-    'rappel',
   );
 
   await db.runAsync(
@@ -841,25 +803,6 @@ export async function seedDatabaseIfNeeded(db: SQLiteDatabase) {
     encryptField('Organiser mes tâches de la semaine'),
     0,
     1,
-  );
-
-  await db.runAsync(
-    'INSERT INTO templates (id, name, body) VALUES (?, ?, ?)',
-    createId('tpl'),
-    'Structure de réunion',
-    '1. Objectif général de la réunion\n2. Points d\'avancement\n3. Décisions à prendre\n4. Actions futures attribuées',
-  );
-
-  await db.runAsync(
-    'INSERT INTO books (id, name, author, status, rating, date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    createId('book'),
-    'Dune',
-    'Frank Herbert',
-    'alire',
-    0,
-    '',
-    'Un classique incontournable de la science-fiction.',
-    now,
   );
 }
 

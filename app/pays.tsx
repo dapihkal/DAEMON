@@ -13,6 +13,7 @@ import type { Country, CountryRegion } from '../src/db/types';
 import { countryRegionOptions } from '../src/lib/module-options';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type CountryDraft = {
   id: string | null;
@@ -43,7 +44,7 @@ export default function PaysScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ countryId?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [countries, setCountries] = useState<Country[]>([]);
   const [regionFilter, setRegionFilter] = useState<'all' | CountryRegion>('all');
   const [draft, setDraft] = useState<CountryDraft | null>(null);

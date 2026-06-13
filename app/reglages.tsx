@@ -21,6 +21,7 @@ import {
 } from '../src/lib/personalization';
 import { toggleHaptic } from '../src/lib/haptics';
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 import { accentOptions, fonts, radii, spacing, themeModeOptions } from '../src/theme/tokens';
 
 const pinRelockDelayOptions = [
@@ -36,7 +37,7 @@ export default function ReglagesScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences, resolvedTheme, setAccent, setThemeMode, updatePreferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [editingAgendaCategoryId, setEditingAgendaCategoryId] = useState<string | null>(null);
 
   const orderedHomeModuleOptions = useMemo(() => {
@@ -49,6 +50,11 @@ export default function ReglagesScreen() {
 
     return [...visibleOptions, ...hiddenOptions];
   }, [preferences.homeModules]);
+
+  // Haptique courte pour une simple sélection (cohérente avec les interrupteurs).
+  const tapHaptic = () => {
+    void toggleHaptic(true, preferences.reduceMotion);
+  };
 
   const toggleHomeModule = (moduleId: HomeModuleId) => {
     const enabled = preferences.homeModules.includes(moduleId);
@@ -75,6 +81,7 @@ export default function ReglagesScreen() {
     const nextModules = [...preferences.homeModules];
     const [module] = nextModules.splice(currentIndex, 1);
     nextModules.splice(nextIndex, 0, module);
+    tapHaptic();
     void updatePreferences({ homeModules: nextModules, homeProfile: 'custom' });
   };
 
@@ -93,6 +100,7 @@ export default function ReglagesScreen() {
   };
 
   const applyHomeProfile = (profileId: (typeof homeProfileOptions)[number]['id']) => {
+    tapHaptic();
     const profile = homeProfileOptions.find((option) => option.id === profileId);
     if (!profile || profile.id === 'custom') {
       void updatePreferences({ homeProfile: 'custom' });
@@ -105,6 +113,109 @@ export default function ReglagesScreen() {
       homeWidgets: profile.widgets,
     });
   };
+
+  const setAgendaColor = (categoryId: string, color: string | null) => {
+    const nextColors = { ...(preferences.agendaColors || {}) };
+    if (color) {
+      nextColors[categoryId] = color;
+    } else {
+      delete nextColors[categoryId];
+    }
+    tapHaptic();
+    void updatePreferences({ agendaColors: nextColors });
+  };
+
+  // ─── Helpers de rendu (suppriment la répétition du JSX) ───────────────────
+
+  // Groupe de pastilles à sélection unique (thème, densité, taille de texte).
+  function renderPillGroup<T extends string>(
+    label: string | null,
+    options: readonly { id: T; label: string }[],
+    selectedId: T,
+    onSelect: (id: T) => void,
+  ) {
+    return (
+      <>
+        {label ? <Text style={styles.groupLabel}>{label}</Text> : null}
+        <View style={styles.pillRow}>
+          {options.map((option) => {
+            const selected = selectedId === option.id;
+
+            return (
+              <Pressable
+                accessibilityLabel={`${label ?? 'Option'} ${option.label}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                hitSlop={hitSlop}
+                key={option.id}
+                onPress={() => onSelect(option.id)}
+                style={({ pressed }) => [styles.pill, selected && styles.pillSelected, pressed && styles.pressed]}
+              >
+                <Text style={[styles.pillLabel, selected && styles.pillLabelSelected]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </>
+    );
+  }
+
+  // Ligne sélectionnable avec coche (profils, reverrouillage PIN, cartes).
+  const renderSelectRow = (
+    key: string,
+    label: string,
+    description: string,
+    selected: boolean,
+    onPress: () => void,
+    accessibilityLabel: string,
+  ) => (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      hitSlop={hitSlop}
+      key={key}
+      onPress={onPress}
+      style={({ pressed }) => [styles.optionRow, selected && styles.optionRowSelected, pressed && styles.pressed]}
+    >
+      <View style={styles.optionMain}>
+        <Text style={styles.optionTitle}>{label}</Text>
+        <Text style={styles.optionBody}>{description}</Text>
+      </View>
+      <View style={[styles.checkBox, selected && styles.checkBoxSelected]}>
+        <Ionicons color={selected ? colors.white : colors.muted} name={selected ? 'checkmark' : 'ellipse-outline'} size={16} />
+      </View>
+    </Pressable>
+  );
+
+  // Ligne interrupteur (animations calmes, modules sensibles).
+  const renderToggleRow = (
+    label: string,
+    valueText: string,
+    active: boolean,
+    onPress: () => void,
+    accessibilityLabel: string,
+  ) => (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: active }}
+      hitSlop={hitSlop}
+      key={accessibilityLabel}
+      onPress={onPress}
+      style={({ pressed }) => [styles.optionRow, pressed && styles.pressed]}
+    >
+      <View style={styles.optionMain}>
+        <Text style={styles.optionTitle}>{label}</Text>
+        <Text style={styles.optionBody}>{valueText}</Text>
+      </View>
+      <View style={[styles.switchTrack, active && styles.switchTrackActive]}>
+        <View style={[styles.switchThumb, active && styles.switchThumbActive]} />
+      </View>
+    </Pressable>
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
 
   return (
     <AppShell kicker="Réglages" title="Personnalisation">
@@ -126,24 +237,8 @@ export default function ReglagesScreen() {
       />
       <View style={styles.groupCard}>
         <View style={styles.pillRow}>
-          {themeModeOptions.map((option) => {
-            const selected = preferences.theme === option.id;
-
-            return (
-              <Pressable
-                accessibilityLabel={`Theme ${option.label}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                hitSlop={hitSlop}
-                key={option.id}
-                onPress={() => {
-                  void setThemeMode(option.id);
-                }}
-                style={({ pressed }) => [styles.pill, selected && styles.pillSelected, pressed && styles.pressed]}
-              >
-                <Text style={[styles.pillLabel, selected && styles.pillLabelSelected]}>{option.label}</Text>
-              </Pressable>
-            );
+          {renderPillGroup(null, themeModeOptions, preferences.theme, (id) => {
+            void setThemeMode(id);
           })}
         </View>
       </View>
@@ -189,91 +284,35 @@ export default function ReglagesScreen() {
       />
       <View style={styles.groupCard}>
         <View style={styles.optionList}>
-          <Text style={styles.groupLabel}>Densité</Text>
-          <View style={styles.pillRow}>
-            {densityOptions.map((option) => {
-              const selected = preferences.density === option.id;
+          {renderPillGroup('Densité', densityOptions, preferences.density, (id) => {
+            void updatePreferences({ density: id });
+          })}
 
-              return (
-                <Pressable
-                  accessibilityLabel={`Densité ${option.label}`}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  hitSlop={hitSlop}
-                  key={option.id}
-                  onPress={() => {
-                    void updatePreferences({ density: option.id });
-                  }}
-                  style={({ pressed }) => [styles.pill, selected && styles.pillSelected, pressed && styles.pressed]}
-                >
-                  <Text style={[styles.pillLabel, selected && styles.pillLabelSelected]}>{option.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          {renderPillGroup('Texte', textScaleOptions, preferences.textScale, (id) => {
+            void updatePreferences({ textScale: id });
+          })}
 
-          <Text style={styles.groupLabel}>Texte</Text>
-          <View style={styles.pillRow}>
-            {textScaleOptions.map((option) => {
-              const selected = preferences.textScale === option.id;
-
-              return (
-                <Pressable
-                  accessibilityLabel={`Taille de texte ${option.label}`}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  hitSlop={hitSlop}
-                  key={option.id}
-                  onPress={() => {
-                    void updatePreferences({ textScale: option.id });
-                  }}
-                  style={({ pressed }) => [styles.pill, selected && styles.pillSelected, pressed && styles.pressed]}
-                >
-                  <Text style={[styles.pillLabel, selected && styles.pillLabelSelected]}>{option.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Pressable
-            accessibilityLabel="Animations calmes"
-            accessibilityRole="switch"
-            accessibilityState={{ checked: preferences.reduceMotion }}
-            hitSlop={hitSlop}
-            onPress={() => {
+          {renderToggleRow(
+            'Animations calmes',
+            preferences.reduceMotion ? 'Activées' : 'Désactivées',
+            preferences.reduceMotion,
+            () => {
               void toggleHaptic(!preferences.reduceMotion, preferences.reduceMotion);
               void updatePreferences({ reduceMotion: !preferences.reduceMotion });
-            }}
-            style={({ pressed }) => [styles.optionRow, pressed && styles.pressed]}
-          >
-            <View style={styles.optionMain}>
-              <Text style={styles.optionTitle}>Animations calmes</Text>
-              <Text style={styles.optionBody}>{preferences.reduceMotion ? 'Activées' : 'Désactivées'}</Text>
-            </View>
-            <View style={[styles.switchTrack, preferences.reduceMotion && styles.switchTrackActive]}>
-              <View style={[styles.switchThumb, preferences.reduceMotion && styles.switchThumbActive]} />
-            </View>
-          </Pressable>
+            },
+            'Animations calmes',
+          )}
 
-          <Pressable
-            accessibilityLabel="Modules sensibles sur l'accueil"
-            accessibilityRole="switch"
-            accessibilityState={{ checked: preferences.showSensitiveContent }}
-            hitSlop={hitSlop}
-            onPress={() => {
+          {renderToggleRow(
+            "Modules sensibles sur l'accueil",
+            preferences.showSensitiveContent ? 'Visibles' : 'Masqués',
+            preferences.showSensitiveContent,
+            () => {
               void toggleHaptic(!preferences.showSensitiveContent, preferences.reduceMotion);
               void updatePreferences({ showSensitiveContent: !preferences.showSensitiveContent });
-            }}
-            style={({ pressed }) => [styles.optionRow, pressed && styles.pressed]}
-          >
-            <View style={styles.optionMain}>
-              <Text style={styles.optionTitle}>Modules sensibles sur l'accueil</Text>
-              <Text style={styles.optionBody}>{preferences.showSensitiveContent ? 'Visibles' : 'Masqués'}</Text>
-            </View>
-            <View style={[styles.switchTrack, preferences.showSensitiveContent && styles.switchTrackActive]}>
-              <View style={[styles.switchThumb, preferences.showSensitiveContent && styles.switchThumbActive]} />
-            </View>
-          </Pressable>
+            },
+            "Modules sensibles sur l'accueil",
+          )}
         </View>
       </View>
 
@@ -284,29 +323,16 @@ export default function ReglagesScreen() {
       />
       <View style={styles.groupCard}>
         <View style={styles.optionList}>
-          {homeProfileOptions.map((option) => {
-            const selected = preferences.homeProfile === option.id;
-
-            return (
-              <Pressable
-                accessibilityLabel={`Profil d accueil ${option.label}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                hitSlop={hitSlop}
-                key={option.id}
-                onPress={() => applyHomeProfile(option.id)}
-                style={({ pressed }) => [styles.optionRow, selected && styles.optionRowSelected, pressed && styles.pressed]}
-              >
-                <View style={styles.optionMain}>
-                  <Text style={styles.optionTitle}>{option.label}</Text>
-                  <Text style={styles.optionBody}>{option.description}</Text>
-                </View>
-                <View style={[styles.checkBox, selected && styles.checkBoxSelected]}>
-                  <Ionicons color={selected ? colors.white : colors.muted} name={selected ? 'checkmark' : 'ellipse-outline'} size={16} />
-                </View>
-              </Pressable>
-            );
-          })}
+          {homeProfileOptions.map((option) =>
+            renderSelectRow(
+              option.id,
+              option.label,
+              option.description,
+              preferences.homeProfile === option.id,
+              () => applyHomeProfile(option.id),
+              `Profil d'accueil ${option.label}`,
+            ),
+          )}
         </View>
       </View>
 
@@ -320,45 +346,56 @@ export default function ReglagesScreen() {
           {agendaCategoryOptions.map((option) => {
             const isEditing = editingAgendaCategoryId === option.id;
             const customColor = preferences.agendaColors?.[option.id];
-            
+
             return (
               <View key={option.id} style={styles.agendaRow}>
                 <Pressable
+                  accessibilityLabel={`Couleur de la catégorie ${option.label}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: isEditing }}
+                  hitSlop={hitSlop}
                   onPress={() => setEditingAgendaCategoryId(isEditing ? null : option.id)}
                   style={({ pressed }) => [styles.agendaCategoryButton, pressed && styles.pressed]}
                 >
-                  <View style={[styles.colorBubble, { backgroundColor: customColor || '#ccc' }]} />
+                  <View style={[styles.colorBubble, { backgroundColor: customColor || colors.surfaceMuted }]} />
                   <Text style={styles.agendaCategoryLabel}>{option.label}</Text>
                   <Ionicons name={isEditing ? 'chevron-up' : 'chevron-down'} size={14} color={colors.muted} />
                 </Pressable>
-                
+
                 {isEditing && (
                   <View style={styles.colorPickerGrid}>
-                    {agendaColorOptions.map((color) => (
-                      <Pressable
-                        key={color}
-                        onPress={() => {
-                          const nextColors = { ...(preferences.agendaColors || {}) };
-                          nextColors[option.id] = color;
-                          void updatePreferences({ agendaColors: nextColors });
-                        }}
-                        style={({ pressed }) => [
-                          styles.colorOption,
-                          customColor === color && styles.colorOptionSelected,
-                          pressed && styles.pressed,
-                          { backgroundColor: color }
-                        ]}
-                      >
-                        {customColor === color && <Ionicons name="checkmark" size={14} color="white" />}
-                      </Pressable>
-                    ))}
+                    {agendaColorOptions.map((color) => {
+                      const selected = customColor === color;
+
+                      return (
+                        <Pressable
+                          accessibilityLabel={`Couleur ${color}${selected ? ' (sélectionnée)' : ''}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          key={color}
+                          onPress={() => setAgendaColor(option.id, color)}
+                          style={({ pressed }) => [
+                            styles.colorOption,
+                            selected && styles.colorOptionSelected,
+                            pressed && styles.pressed,
+                            { backgroundColor: color },
+                          ]}
+                        >
+                          {selected && <Ionicons name="checkmark" size={14} color="white" />}
+                        </Pressable>
+                      );
+                    })}
                     <Pressable
-                      onPress={() => {
-                        const nextColors = { ...(preferences.agendaColors || {}) };
-                        delete nextColors[option.id];
-                        void updatePreferences({ agendaColors: nextColors });
-                      }}
-                      style={({ pressed }) => [styles.colorOption, !customColor && styles.colorOptionSelected, pressed && styles.pressed, { backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.line }]}
+                      accessibilityLabel="Couleur par défaut"
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: !customColor }}
+                      onPress={() => setAgendaColor(option.id, null)}
+                      style={({ pressed }) => [
+                        styles.colorOption,
+                        !customColor && styles.colorOptionSelected,
+                        pressed && styles.pressed,
+                        { backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.line },
+                      ]}
                     >
                       {!customColor && <Ionicons name="close" size={14} color={colors.text} />}
                     </Pressable>
@@ -377,31 +414,19 @@ export default function ReglagesScreen() {
       />
       <View style={styles.groupCard}>
         <View style={styles.optionList}>
-          {pinRelockDelayOptions.map((option) => {
-            const selected = preferences.pinRelockDelay === option.id;
-
-            return (
-              <Pressable
-                accessibilityLabel={`Reverrouillage ${option.label}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                hitSlop={hitSlop}
-                key={option.id}
-                onPress={() => {
-                  void updatePreferences({ pinRelockDelay: option.id });
-                }}
-                style={({ pressed }) => [styles.optionRow, selected && styles.optionRowSelected, pressed && styles.pressed]}
-              >
-                <View style={styles.optionMain}>
-                  <Text style={styles.optionTitle}>{option.label}</Text>
-                  <Text style={styles.optionBody}>{option.description}</Text>
-                </View>
-                <View style={[styles.checkBox, selected && styles.checkBoxSelected]}>
-                  <Ionicons color={selected ? colors.white : colors.muted} name={selected ? 'checkmark' : 'ellipse-outline'} size={16} />
-                </View>
-              </Pressable>
-            );
-          })}
+          {pinRelockDelayOptions.map((option) =>
+            renderSelectRow(
+              option.id,
+              option.label,
+              option.description,
+              preferences.pinRelockDelay === option.id,
+              () => {
+                tapHaptic();
+                void updatePreferences({ pinRelockDelay: option.id });
+              },
+              `Reverrouillage ${option.label}`,
+            ),
+          )}
         </View>
       </View>
 
@@ -412,29 +437,16 @@ export default function ReglagesScreen() {
       />
       <View style={styles.groupCard}>
         <View style={styles.optionList}>
-          {homeWidgetOptions.map((option) => {
-            const selected = preferences.homeWidgets.includes(option.id);
-
-            return (
-              <Pressable
-                accessibilityLabel={`Carte contextuelle ${option.label}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                hitSlop={hitSlop}
-                key={option.id}
-                onPress={() => toggleHomeWidget(option.id)}
-                style={({ pressed }) => [styles.optionRow, pressed && styles.pressed]}
-              >
-                <View style={styles.optionMain}>
-                  <Text style={styles.optionTitle}>{option.label}</Text>
-                  <Text style={styles.optionBody}>{option.description}</Text>
-                </View>
-                <View style={[styles.checkBox, selected && styles.checkBoxSelected]}>
-                  <Ionicons color={selected ? colors.white : colors.muted} name={selected ? 'checkmark' : 'ellipse-outline'} size={16} />
-                </View>
-              </Pressable>
-            );
-          })}
+          {homeWidgetOptions.map((option) =>
+            renderSelectRow(
+              option.id,
+              option.label,
+              option.description,
+              preferences.homeWidgets.includes(option.id),
+              () => toggleHomeWidget(option.id),
+              `Carte contextuelle ${option.label}`,
+            ),
+          )}
         </View>
       </View>
 
@@ -450,6 +462,7 @@ export default function ReglagesScreen() {
             accessibilityRole="button"
             hitSlop={hitSlop}
             onPress={() => {
+              tapHaptic();
               void updatePreferences({ homeModules: defaultHomeModuleOrder, homeWidgets: defaultHomeWidgets, homeProfile: 'custom' });
             }}
             style={({ pressed }) => [styles.resetButton, pressed && styles.pressed]}
@@ -462,6 +475,8 @@ export default function ReglagesScreen() {
             const selected = preferences.homeModules.includes(option.id);
             const index = preferences.homeModules.indexOf(option.id);
             const sensitive = sensitiveHomeModuleIds.includes(option.id);
+            const canMoveUp = selected && index > 0;
+            const canMoveDown = selected && index >= 0 && index < preferences.homeModules.length - 1;
 
             return (
               <View key={option.id} style={[styles.optionRow, !selected && styles.optionRowMuted]}>
@@ -480,26 +495,22 @@ export default function ReglagesScreen() {
                   <Pressable
                     accessibilityLabel={`Monter ${option.label}`}
                     accessibilityRole="button"
-                    accessibilityState={{ disabled: !selected || index <= 0 }}
-                    disabled={!selected || index <= 0}
+                    accessibilityState={{ disabled: !canMoveUp }}
+                    disabled={!canMoveUp}
                     hitSlop={hitSlop}
                     onPress={() => moveHomeModule(option.id, -1)}
-                    style={({ pressed }) => [styles.smallButton, (!selected || index <= 0) && styles.smallButtonDisabled, pressed && styles.pressed]}
+                    style={({ pressed }) => [styles.smallButton, !canMoveUp && styles.smallButtonDisabled, pressed && styles.pressed]}
                   >
                     <Ionicons color={colors.text} name="chevron-up" size={17} />
                   </Pressable>
                   <Pressable
                     accessibilityLabel={`Descendre ${option.label}`}
                     accessibilityRole="button"
-                    accessibilityState={{ disabled: !selected || index < 0 || index >= preferences.homeModules.length - 1 }}
-                    disabled={!selected || index < 0 || index >= preferences.homeModules.length - 1}
+                    accessibilityState={{ disabled: !canMoveDown }}
+                    disabled={!canMoveDown}
                     hitSlop={hitSlop}
                     onPress={() => moveHomeModule(option.id, 1)}
-                    style={({ pressed }) => [
-                      styles.smallButton,
-                      (!selected || index < 0 || index >= preferences.homeModules.length - 1) && styles.smallButtonDisabled,
-                      pressed && styles.pressed,
-                    ]}
+                    style={({ pressed }) => [styles.smallButton, !canMoveDown && styles.smallButtonDisabled, pressed && styles.pressed]}
                   >
                     <Ionicons color={colors.text} name="chevron-down" size={17} />
                   </Pressable>
@@ -519,8 +530,6 @@ export default function ReglagesScreen() {
           })}
         </View>
       </View>
-
-
     </AppShell>
   );
 }

@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Swipeable, type SwipeableProps } from 'react-native-gesture-handler';
 
@@ -26,8 +26,13 @@ export function SwipeActionRow({
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
   const styles = useMemo(() => createStyles(colors, actionKind), [actionKind, colors]);
+  const swipeableRef = useRef<Swipeable>(null);
 
+  // L'action n'est déclenchée que par un tap explicite sur le bouton révélé,
+  // jamais par le swipe seul : pas de suppression accidentelle.
   const handleAction = async () => {
+    swipeableRef.current?.close();
+
     if (actionKind === 'delete') {
       await deletionHaptic(preferences.reduceMotion);
     } else {
@@ -39,10 +44,12 @@ export function SwipeActionRow({
 
   return (
     <Swipeable
+      ref={swipeableRef}
       containerStyle={containerStyle}
       enableTrackpadTwoFingerGesture
       friction={2}
       overshootFriction={8}
+      rightThreshold={52}
       renderRightActions={() => (
         <View style={styles.actionWrap}>
           <Pressable
@@ -57,13 +64,10 @@ export function SwipeActionRow({
           </Pressable>
         </View>
       )}
-      rightThreshold={52}
+      // Légère vibration à la révélation du bouton (feedback), bien distincte
+      // de l'haptique de l'action elle-même qui n'a lieu qu'au tap.
       onSwipeableWillOpen={() => {
         void swipeHaptic(preferences.reduceMotion);
-      }}
-      onSwipeableOpen={(_, swipeable) => {
-        swipeable.close();
-        void handleAction();
       }}
     >
       {children}

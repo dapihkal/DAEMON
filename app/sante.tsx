@@ -12,6 +12,7 @@ import type { Dose, JournalEntry, PhysicalActivity, SleepEntry, Treatment } from
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
 import { getMoodColor, getInterpolatedMoodColor } from '../src/theme/score-colors';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 function localDay(value = new Date()) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -97,7 +98,7 @@ export default function SanteScreen() {
   const { colors } = useTheme();
   const queryClient = useQueryClient();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
 
   const { data: doses = [] } = useQuery<Dose[]>({
     queryKey: ['doses'],

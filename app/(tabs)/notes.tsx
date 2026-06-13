@@ -17,6 +17,7 @@ import type { Note } from '../../src/db/types';
 import { confirmationHaptic, deletionHaptic, selectionHaptic } from '../../src/lib/haptics';
 import { useTheme, useThemePreferences } from '../../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../../src/theme/tokens';
+import { useThemedStyles } from '../../src/theme/use-themed-styles';
 
 type NoteDraft = {
   id: string | null;
@@ -52,7 +53,7 @@ export default function NotesScreen() {
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
   const { showUndo } = useUndo();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const params = useLocalSearchParams<{ noteId?: string }>();
   const [notes, setNotes] = useState<Note[]>([]);
   const [notesReady, setNotesReady] = useState(false);

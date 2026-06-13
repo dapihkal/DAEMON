@@ -15,6 +15,7 @@ import type { Dose, Substance, SubstanceCategory } from '../src/db/types';
 import { doseRoutes, doseUnits, feelOptions, substanceCategoryOptions } from '../src/lib/module-options';
 import { useTheme } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 type DoseDraft = {
   id: string | null;
@@ -129,7 +130,7 @@ export default function ConsoScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ doseId?: string }>();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [doses, setDoses] = useState<Dose[]>([]);
   const [substances, setSubstances] = useState<Substance[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<'all' | SubstanceCategory>('all');
@@ -373,10 +374,10 @@ export default function ConsoScreen() {
         <FlashList
           data={filteredDoses}
           keyExtractor={(dose) => dose.id}
-          ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
-          contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+          ItemSeparatorComponent={() => <View style={{ height: spacing.lg }} />}
+          contentContainerStyle={{ paddingBottom: spacing.xl }}
           ListHeaderComponent={(
-            <View style={{ gap: spacing.md, marginBottom: spacing.md, marginTop: spacing.md }}>
+            <View style={{ gap: spacing.lg, marginBottom: spacing.lg }}>
               <SectionTitle eyebrow="Suivi" title="Suivi des prises" subtitle="Journal de prises avec catégorie, voie, coût, ressenti, contexte et vue calendrier." />
               <Pressable onPress={() => setDraft(createEmptyDraft())} style={styles.primaryCta}><Text style={styles.primaryCtaLabel}>+ Nouvelle prise</Text></Pressable>
               <View style={styles.metricsGrid}><View style={styles.metricTile}><Text style={styles.metricValue}>{monthMetrics.count}</Text><Text style={styles.metricLabel}>prises ce mois</Text></View><View style={styles.metricTile}><Text style={styles.metricValue}>{monthMetrics.spend ? monthMetrics.spend.toFixed(monthMetrics.spend % 1 ? 2 : 0) : '0'}</Text><Text style={styles.metricLabel}>euros ce mois</Text></View></View>

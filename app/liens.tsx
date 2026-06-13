@@ -32,6 +32,7 @@ import type { ActivityLogEntry, EntityAttachment, EntityKind, EntityLink, Entity
 import { createId } from '../src/lib/id';
 import { useTheme, useThemePreferences } from '../src/theme/theme-provider';
 import { fonts, radii, spacing } from '../src/theme/tokens';
+import { useThemedStyles } from '../src/theme/use-themed-styles';
 
 function getEntityHref(entity: EntityRef): Href {
   if (entity.kind === 'note') {
@@ -135,7 +136,7 @@ export default function LiensScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [entities, setEntities] = useState<EntityRef[]>([]);
   const [links, setLinks] = useState<EntityLink[]>([]);
   const [tags, setTags] = useState<EntityTag[]>([]);

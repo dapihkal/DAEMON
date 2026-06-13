@@ -82,6 +82,7 @@ import { getInterpolatedMoodColor } from '../../src/theme/score-colors';
 import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, useAudioRecorderState } from 'expo-audio';
 import { Directory, File, Paths } from 'expo-file-system';
 import { saveEntityAttachment } from '../../src/db/cross-repositories';
+import { useThemedStyles } from '../../src/theme/use-themed-styles';
 
 type SearchResult = {
   id: string;
@@ -321,7 +322,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useThemedStyles(createStyles);
   const [reviewRangeMode, setReviewRangeMode] = useState<ReviewRangeMode>(7);
   const [customReviewStart, setCustomReviewStart] = useState(localDay(addDays(new Date(), -6)));
   const [customReviewEnd, setCustomReviewEnd] = useState(localDay());
