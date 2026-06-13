@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -73,6 +73,7 @@ export default function IdeesScreen() {
   const [subtaskText, setSubtaskText] = useState('');
 
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [searchText, setSearchText] = useState('');
 
   const uniqueTags = useMemo(() => {
     const set = new Set<string>();
@@ -123,8 +124,28 @@ export default function IdeesScreen() {
     if (selectedTag) {
       result = result.filter((idea) => idea.tags.some((tag) => tag.trim().toLowerCase() === selectedTag));
     }
-    return result;
-  }, [ideas, statusFilter, selectedTag]);
+    const query = searchText.trim().toLowerCase();
+    if (query) {
+      result = result.filter(
+        (idea) =>
+          idea.text.toLowerCase().includes(query) ||
+          idea.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+          idea.subtasks.some((subtask) => subtask.text.toLowerCase().includes(query)),
+      );
+    }
+    return [...result].sort((a, b) => {
+      if (a.pinned !== b.pinned) {
+        return a.pinned ? -1 : 1;
+      }
+      return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+    });
+  }, [ideas, statusFilter, selectedTag, searchText]);
+
+  const statusCounts = useMemo(() => {
+    const counts = new Map<IdeaStatus, number>();
+    ideas.forEach((idea) => counts.set(idea.status, (counts.get(idea.status) ?? 0) + 1));
+    return counts;
+  }, [ideas]);
 
   const groupedIdeas = useMemo(() => {
     const activeIdeas = selectedTag
@@ -155,7 +176,7 @@ export default function IdeesScreen() {
     }
 
     const saved = await saveIdea(db, {
-      text: quickText,
+      text: quickText.trim(),
       status: 'explorer',
       people: [],
       pinned: false,
@@ -172,19 +193,28 @@ export default function IdeesScreen() {
   };
 
   const handleSave = async () => {
-    if (!draft) {
+    if (!draft || !draft.text.trim()) {
       return;
     }
 
+    const normalizedTags = [
+      ...new Set(
+        tagText
+          .split(',')
+          .map((tag) => tag.trim().replace(/^#/, '').toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+
     const saved = await saveIdea(db, {
       id: draft.id ?? undefined,
-      text: draft.text,
+      text: draft.text.trim(),
       status: draft.status,
       publishDate: draft.publishDate,
       pinned: draft.pinned,
       people: draft.people,
       subtasks: draft.subtasks,
-      tags: tagText.split(',').map((tag) => tag.trim().replace(/^#/, '')).filter(Boolean),
+      tags: normalizedTags,
       createdAt: draft.createdAt ?? undefined,
     });
 
@@ -198,16 +228,25 @@ export default function IdeesScreen() {
     setIdeas(await listIdeas(db));
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!draft?.id) {
       return;
     }
 
-    await deleteIdea(db, draft.id);
-    setDraft(null);
-    setTagText('');
-    setSubtaskText('');
-    setIdeas(await listIdeas(db));
+    Alert.alert('Supprimer cette idée ?', 'Cette action est définitive.', [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Supprimer',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteIdea(db, draft.id as string);
+          setDraft(null);
+          setTagText('');
+          setSubtaskText('');
+          setIdeas(await listIdeas(db));
+        },
+      },
+    ]);
   };
 
   const handleCycleStatus = async (ideaId: string) => {
@@ -225,7 +264,7 @@ export default function IdeesScreen() {
       subtasks: [
         ...draft.subtasks,
         {
-          id: `subtask-${Date.now()}`,
+          id: `subtask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           text: subtaskText.trim(),
           done: false,
         },
@@ -318,9 +357,12 @@ export default function IdeesScreen() {
           <Text style={styles.fieldLabel}>Sous-tâches</Text>
           <View style={styles.subtaskInputRow}>
             <TextInput
+              blurOnSubmit={false}
               onChangeText={setSubtaskText}
+              onSubmitEditing={addSubtask}
               placeholder="Ajouter une sous-tâche"
               placeholderTextColor={colors.muted}
+              returnKeyType="done"
               style={[styles.input, styles.subtaskInput]}
               value={subtaskText}
             />
@@ -373,7 +415,11 @@ export default function IdeesScreen() {
           </View>
 
           <View style={styles.buttonRow}>
-            <Pressable onPress={handleSave} style={styles.primaryButton}>
+            <Pressable
+              disabled={!draft.text.trim()}
+              onPress={handleSave}
+              style={[styles.primaryButton, !draft.text.trim() && styles.primaryButtonDisabled]}
+            >
               <Text style={styles.primaryButtonLabel}>Enregistrer</Text>
             </Pressable>
             {draft.id ? (
@@ -439,19 +485,29 @@ export default function IdeesScreen() {
 
       <View style={{ gap: spacing.sm }}>
         {viewMode === 'liste' ? (
-          <View style={styles.filterRow}>
-            <Pressable onPress={() => setStatusFilter('all')} style={[styles.filterChip, statusFilter === 'all' && styles.filterChipActive]}>
-              <Text style={[styles.filterChipLabel, statusFilter === 'all' && styles.filterChipLabelActive]}>Toutes</Text>
-            </Pressable>
-            {ideaStatusOptions.map((status) => {
-              const selected = statusFilter === status.id;
-              return (
-                <Pressable key={status.id} onPress={() => setStatusFilter(status.id)} style={[styles.filterChip, selected && { backgroundColor: status.color, borderColor: status.color }]}>
-                  <Text style={[styles.filterChipLabel, selected && styles.filterChipLabelActive]}>{status.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <>
+            <TextInput
+              onChangeText={setSearchText}
+              placeholder="Rechercher dans les idées, tags, sous-tâches..."
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              value={searchText}
+            />
+            <View style={styles.filterRow}>
+              <Pressable onPress={() => setStatusFilter('all')} style={[styles.filterChip, statusFilter === 'all' && styles.filterChipActive]}>
+                <Text style={[styles.filterChipLabel, statusFilter === 'all' && styles.filterChipLabelActive]}>Toutes · {ideas.length}</Text>
+              </Pressable>
+              {ideaStatusOptions.map((status) => {
+                const selected = statusFilter === status.id;
+                const count = statusCounts.get(status.id) ?? 0;
+                return (
+                  <Pressable key={status.id} onPress={() => setStatusFilter(status.id)} style={[styles.filterChip, selected && { backgroundColor: status.color, borderColor: status.color }]}>
+                    <Text style={[styles.filterChipLabel, selected && styles.filterChipLabelActive]}>{status.label} · {count}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </>
         ) : null}
 
         {uniqueTags.length > 0 ? (
@@ -507,6 +563,11 @@ export default function IdeesScreen() {
                       <Text style={styles.statusBadgeLabel}>{statusMeta.label}</Text>
                     </Pressable>
                   </View>
+                  {idea.publishDate ? (
+                    <Text style={[styles.ideaMeta, idea.publishDate < new Date().toISOString().slice(0, 10) && styles.ideaMetaOverdue]}>
+                      Publication : {idea.publishDate}
+                    </Text>
+                  ) : null}
                   {idea.subtasks.length ? (
                     <Text style={styles.ideaMeta}>{doneSubtasks}/{idea.subtasks.length} sous-tâches terminées</Text>
                   ) : null}
@@ -525,11 +586,17 @@ export default function IdeesScreen() {
             <View key={status.id} style={styles.pipelineSection}>
               <Text style={[styles.pipelineTitle, { color: status.color }]}>{status.label} · {status.ideas.length}</Text>
               {status.ideas.length ? (
-                status.ideas.map((idea) => (
-                  <Pressable key={idea.id} onPress={() => openDraft(idea)} style={styles.pipelineCard}>
-                    <Text style={styles.pipelineText}>{idea.pinned ? '★ ' : ''}{idea.text}</Text>
-                  </Pressable>
-                ))
+                status.ideas.map((idea) => {
+                  const doneSubtasks = idea.subtasks.filter((subtask) => subtask.done).length;
+                  return (
+                    <Pressable key={idea.id} onPress={() => openDraft(idea)} style={styles.pipelineCard}>
+                      <Text style={styles.pipelineText}>{idea.pinned ? '★ ' : ''}{idea.text}</Text>
+                      {idea.subtasks.length ? (
+                        <Text style={styles.ideaMeta}>{doneSubtasks}/{idea.subtasks.length} sous-tâches</Text>
+                      ) : null}
+                    </Pressable>
+                  );
+                })
               ) : (
                 <Text style={styles.helpText}>Aucune idée dans cette colonne.</Text>
               )}
@@ -733,6 +800,13 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       color: colors.white,
       fontFamily: fonts.bodyBold,
       fontSize: 14,
+    },
+    primaryButtonDisabled: {
+      opacity: 0.4,
+    },
+    ideaMetaOverdue: {
+      color: colors.accent,
+      fontFamily: fonts.bodyBold,
     },
     secondaryButton: {
       alignItems: 'center',

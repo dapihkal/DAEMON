@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View, type GestureResponderEvent } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type GestureResponderEvent } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Image } from 'expo-image';
@@ -404,6 +404,12 @@ function formatLongDate(value: string) {
   return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+function toLocalIsoDate(value: Date) {
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${value.getFullYear()}-${month}-${day}`;
+}
+
 function getContactSummary(person: Person): { label: string; state: ContactState; daysUntil: number | null } {
   const frequency = getContactFrequencyMeta(person.contactFrequency);
   if (!frequency.days) {
@@ -432,7 +438,7 @@ function getContactSummary(person: Person): { label: string; state: ContactState
     return { label: `Dans ${daysUntil} j`, state: 'soon', daysUntil };
   }
 
-  return { label: `OK jusqu'au ${formatShortDate(nextContact.toISOString().slice(0, 10))}`, state: 'ok', daysUntil };
+  return { label: `OK jusqu'au ${formatShortDate(toLocalIsoDate(nextContact))}`, state: 'ok', daysUntil };
 }
 
 function getContactUrgencyRank(person: Person) {
@@ -492,6 +498,9 @@ function buildNetworkGraph(
   layoutMode: NetworkLayoutMode,
   selectedNetworkTag: string | null,
   externalScale = 1,
+  manualPositions: Record<string, ManualNodePosition> = {},
+  dragPreview: DragPreview | null = null,
+  draggedNodeId: string | null = null,
 ) {
   const personById = new Map(people.map((person) => [person.id, person]));
   const selectedPerson = selectedPersonId ? personById.get(selectedPersonId) ?? null : null;
@@ -627,11 +636,24 @@ function buildNetworkGraph(
     });
   }
 
+  // Les positions manuelles (drag) priment sur le layout calculé,
+  // puis la position de drag en cours prime sur tout.
+  Object.entries(manualPositions).forEach(([personId, position]) => {
+    if (personById.has(personId)) {
+      nodeCoords.set(personId, { x: position.x, y: position.y });
+    }
+  });
+
+  if (dragPreview && personById.has(dragPreview.nodeId)) {
+    nodeCoords.set(dragPreview.nodeId, { x: dragPreview.x, y: dragPreview.y });
+  }
+
   const nodes: NetworkNode[] = people.map((person) => {
     const coord = nodeCoords.get(person.id) || { x: cx, y: cy };
     const isSelected = selectedPerson?.id === person.id;
     const isVisible = visibleIds ? visibleIds.has(person.id) : true;
     const connectedToSelection = Boolean(selectedPerson && !isSelected && visibleIds?.has(person.id));
+    const isDragged = draggedNodeId === person.id;
 
     return {
       person,
@@ -642,12 +664,12 @@ function buildNetworkGraph(
       initials: getInitials(person.name),
       label: getFirstName(person.name),
       selected: isSelected,
-      dimmed: !isVisible,
-      showLabel: isSelected || isVisible,
-      scale: isSelected ? 1.15 : connectedToSelection ? 1.05 : 1,
-      haloOpacity: isSelected ? 0.56 : connectedToSelection ? 0.24 : isVisible ? 0.15 : 0.04,
+      dimmed: !isVisible && !isDragged,
+      showLabel: isSelected || isVisible || isDragged,
+      scale: isDragged ? 1.18 : isSelected ? 1.15 : connectedToSelection ? 1.05 : 1,
+      haloOpacity: isDragged ? 0.5 : isSelected ? 0.56 : connectedToSelection ? 0.24 : isVisible ? 0.15 : 0.04,
       connectedToSelection,
-      dragged: false,
+      dragged: isDragged,
     };
   });
 
@@ -1060,6 +1082,50 @@ export default function CercleScreen() {
   const interestFilters = useMemo(() => listUniqueInterests(people), [people]);
   const tagFilters = useMemo(() => listUniqueTags(people), [people]);
 
+  // Compteurs affichés sur les chips du mode Contact.
+  const contactFilterCounts = useMemo(() => {
+    const counts: Record<string, number> = { due: 0 };
+    contactFrequencyOptions.forEach((option) => {
+      counts[option.id] = 0;
+    });
+
+    filteredPeople.forEach((person) => {
+      counts[person.contactFrequency] = (counts[person.contactFrequency] ?? 0) + 1;
+      const state = getContactSummary(person).state;
+      if (state === 'overdue' || state === 'due' || state === 'soon' || state === 'missing') {
+        counts.due += 1;
+      }
+    });
+
+    return counts;
+  }, [filteredPeople]);
+
+  // Libellé sûr : une catégorie en cours de renommage (label vide) garde un nom lisible.
+  const getDisplayCategoryLabel = useCallback(
+    (category: PersonCategoryDefinition) =>
+      category.label.trim() || getDefaultPersonCategory(category.id)?.label || 'Catégorie',
+    [],
+  );
+
+  const hasActiveFilters = Boolean(
+    searchQuery.trim() ||
+      selectedInterest ||
+      selectedNetworkCategory ||
+      selectedNetworkProximity ||
+      selectedNetworkContact ||
+      selectedNetworkTag,
+  );
+
+  const handleResetFilters = useCallback(() => {
+    setSearchQuery('');
+    setSelectedInterest(null);
+    setSelectedNetworkCategory(null);
+    setSelectedNetworkProximity(null);
+    setSelectedNetworkContact(null);
+    setSelectedNetworkTag(null);
+    setSelectedPersonId(null);
+  }, []);
+
   const selectedPerson = useMemo(
     () => people.find((person) => person.id === selectedPersonId) ?? null,
     [people, selectedPersonId],
@@ -1222,8 +1288,21 @@ export default function CercleScreen() {
   const [scaleFactor, setScaleFactor] = useState(1);
 
   const networkGraph = useMemo(
-    () => buildNetworkGraph(networkPeople, displayPersonCategories, selectedPersonId, networkLayoutMode, selectedNetworkTag, scaleFactor),
-    [displayPersonCategories, networkPeople, selectedPersonId, networkLayoutMode, selectedNetworkTag, scaleFactor],
+    () =>
+      buildNetworkGraph(
+        networkPeople,
+        displayPersonCategories,
+        selectedPersonId,
+        networkLayoutMode,
+        selectedNetworkTag,
+        scaleFactor,
+        manualNodePositions,
+        dragPreviewRef.current,
+        draggedNodeId,
+      ),
+    // dragRenderTick force le recalcul pendant un drag (dragPreviewRef est une ref).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [displayPersonCategories, networkPeople, selectedPersonId, networkLayoutMode, selectedNetworkTag, scaleFactor, manualNodePositions, draggedNodeId, dragRenderTick],
   );
 
   const selectedNetworkNode = useMemo(
@@ -2654,7 +2733,7 @@ export default function CercleScreen() {
       </View>
 
       {interestFilters.length ? (
-        <View style={styles.filterRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
           <Pressable
             onPress={() => {
               setSelectedInterest(null);
@@ -2670,7 +2749,7 @@ export default function CercleScreen() {
               <Pressable
                 key={interest}
                 onPress={() => {
-                  setSelectedInterest(interest);
+                  setSelectedInterest((current) => (current === interest ? null : interest));
                   setSelectedPersonId(null);
                 }}
                 style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressSoft]}
@@ -2679,13 +2758,13 @@ export default function CercleScreen() {
               </Pressable>
             );
           })}
-        </View>
+        </ScrollView>
       ) : null}
 
       {viewMode === 'reseau' ? (
         <>
           <Text style={styles.helperText}>Mode de constellation</Text>
-          <View style={styles.filterRow}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
             {networkLayoutOptions.map((option) => {
               const active = networkLayoutMode === option.id;
               return (
@@ -2701,7 +2780,7 @@ export default function CercleScreen() {
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
 
           <View style={styles.inlineActionsRow}>
             <Pressable onPress={() => setShowCategoryPersonalization((current) => !current)} style={({ pressed }) => [styles.inlineSettingsButton, pressed && styles.pressSoft]}>
@@ -2780,8 +2859,8 @@ export default function CercleScreen() {
 
       {viewMode === 'reseau' && networkLayoutMode === 'categories' && networkFilterCategories.length ? (
         <>
-          <Text style={styles.helperText}>Filtrer la cartographie par categorie</Text>
-          <View style={styles.filterRow}>
+          <Text style={styles.helperText}>Filtrer la cartographie par catégorie</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
             <Pressable
               onPress={() => {
                 setSelectedNetworkCategory(null);
@@ -2806,24 +2885,24 @@ export default function CercleScreen() {
                     pressed && styles.pressSoft,
                   ]}
                 >
-                  <Text style={[styles.filterChipLabel, active && styles.linkChipLabelSelected]}>{category.label}</Text>
+                  <Text style={[styles.filterChipLabel, active && styles.linkChipLabelSelected]}>{getDisplayCategoryLabel(category)}</Text>
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         </>
       ) : null}
 
       {viewMode === 'reseau' && networkLayoutMode === 'proximite' ? (
         <>
           <Text style={styles.helperText}>Filtrer par intensité de lien</Text>
-          <View style={styles.filterRow}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
             <Pressable
               onPress={() => {
                 setSelectedNetworkProximity(null);
                 setSelectedPersonId(null);
               }}
-              style={[styles.filterChip, !selectedNetworkProximity && styles.filterChipActive]}
+              style={({ pressed }) => [styles.filterChip, !selectedNetworkProximity && styles.filterChipActive, pressed && styles.pressSoft]}
             >
               <Text style={[styles.filterChipLabel, !selectedNetworkProximity && styles.filterChipLabelActive]}>Toutes</Text>
             </Pressable>
@@ -2836,20 +2915,20 @@ export default function CercleScreen() {
                     setSelectedNetworkProximity((current) => (current === strength ? null : strength));
                     setSelectedPersonId(null);
                   }}
-                  style={[styles.filterChip, active && styles.filterChipActive]}
+                  style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressSoft]}
                 >
                   <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>{getLinkStrengthLabel(strength)}</Text>
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         </>
       ) : null}
 
       {viewMode === 'reseau' && networkLayoutMode === 'contact' ? (
         <>
           <Text style={styles.helperText}>Filtrer par rythme de contact</Text>
-          <View style={styles.filterRow}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
             <Pressable
               onPress={() => {
                 setSelectedNetworkContact(null);
@@ -2866,7 +2945,9 @@ export default function CercleScreen() {
               }}
               style={({ pressed }) => [styles.filterChip, selectedNetworkContact === 'due' && styles.filterChipActive, pressed && styles.pressSoft]}
             >
-              <Text style={[styles.filterChipLabel, selectedNetworkContact === 'due' && styles.filterChipLabelActive]}>A recontacter</Text>
+              <Text style={[styles.filterChipLabel, selectedNetworkContact === 'due' && styles.filterChipLabelActive]}>
+                À recontacter · {contactFilterCounts.due ?? 0}
+              </Text>
             </Pressable>
             {contactFrequencyOptions.filter((frequency) => frequency.id !== 'none').map((frequency) => {
               const active = selectedNetworkContact === frequency.id;
@@ -2879,44 +2960,61 @@ export default function CercleScreen() {
                   }}
                   style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressSoft]}
                 >
-                  <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>{frequency.label}</Text>
+                  <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>
+                    {frequency.label} · {contactFilterCounts[frequency.id] ?? 0}
+                  </Text>
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         </>
       ) : null}
 
-      {viewMode === 'reseau' && networkLayoutMode === 'tags' && tagFilters.length ? (
-        <>
-          <Text style={styles.helperText}>Filtrer par tag relationnel</Text>
-          <View style={styles.filterRow}>
-            <Pressable
-              onPress={() => {
-                setSelectedNetworkTag(null);
-                setSelectedPersonId(null);
-              }}
-              style={({ pressed }) => [styles.filterChip, !selectedNetworkTag && styles.filterChipActive, pressed && styles.pressSoft]}
-            >
-              <Text style={[styles.filterChipLabel, !selectedNetworkTag && styles.filterChipLabelActive]}>Tous</Text>
-            </Pressable>
-            {tagFilters.map((tag) => {
-              const active = selectedNetworkTag === tag;
-              return (
-                <Pressable
-                  key={`network-tag-${tag}`}
-                  onPress={() => {
-                    setSelectedNetworkTag((current) => (current === tag ? null : tag));
-                    setSelectedPersonId(null);
-                  }}
-                  style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressSoft]}
-                >
-                  <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>#{tag}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </>
+      {viewMode === 'reseau' && networkLayoutMode === 'tags' ? (
+        tagFilters.length ? (
+          <>
+            <Text style={styles.helperText}>Filtrer par tag relationnel</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              <Pressable
+                onPress={() => {
+                  setSelectedNetworkTag(null);
+                  setSelectedPersonId(null);
+                }}
+                style={({ pressed }) => [styles.filterChip, !selectedNetworkTag && styles.filterChipActive, pressed && styles.pressSoft]}
+              >
+                <Text style={[styles.filterChipLabel, !selectedNetworkTag && styles.filterChipLabelActive]}>Tous</Text>
+              </Pressable>
+              {tagFilters.map((tag) => {
+                const active = selectedNetworkTag?.toLowerCase() === tag.toLowerCase();
+                return (
+                  <Pressable
+                    key={`network-tag-${tag}`}
+                    onPress={() => {
+                      setSelectedNetworkTag((current) => (current?.toLowerCase() === tag.toLowerCase() ? null : tag));
+                      setSelectedPersonId(null);
+                    }}
+                    style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressSoft]}
+                  >
+                    <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>#{tag}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </>
+        ) : (
+          <Text style={styles.helperText}>Aucun tag relationnel défini. Ajoute des tags aux fiches pour filtrer le réseau.</Text>
+        )
+      ) : null}
+
+      {hasActiveFilters ? (
+        <View style={styles.filterSummaryRow}>
+          <Text style={styles.filterSummaryLabel}>
+            {(viewMode === 'reseau' ? networkPeople.length : filteredPeople.length)} personne{(viewMode === 'reseau' ? networkPeople.length : filteredPeople.length) > 1 ? 's' : ''} affichée{(viewMode === 'reseau' ? networkPeople.length : filteredPeople.length) > 1 ? 's' : ''}
+          </Text>
+          <Pressable onPress={handleResetFilters} style={({ pressed }) => [styles.inlineActionChip, pressed && styles.pressSoft]}>
+            <Text style={styles.inlineActionChipLabel}>Réinitialiser les filtres</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       <Pressable onPress={() => { setSelectedPersonId(null); setDraftFeedback(null); setDraft(createEmptyDraft()); }} style={({ pressed }) => [styles.addButton, pressed && styles.pressScale]}>
@@ -3040,25 +3138,28 @@ export default function CercleScreen() {
                             },
                           ]}
                         />
-                        <Pressable
+                        <View
                           accessible
                           accessibilityRole="button"
                           hitSlop={12}
-                          onPress={() => {
-                            setSelectedPersonId((current) => (current === node.person.id ? null : node.person.id));
-                            selectionHaptic();
-                          }}
+                          onStartShouldSetResponder={() => true}
+                          onResponderTerminationRequest={() => false}
+                          onResponderGrant={(event) => handleNodeResponderGrant(node, event)}
+                          onResponderMove={handleNodeResponderMove}
+                          onResponderRelease={handleNodeResponderRelease}
+                          onResponderTerminate={handleNodeResponderRelease}
                           style={[
                             styles.networkNode,
                             {
                               backgroundColor: node.color,
-                              borderColor: node.selected ? colors.white : node.connectedToSelection ? colors.accent : colors.surfaceRaised,
+                              borderColor: node.dragged ? colors.white : node.selected ? colors.white : node.connectedToSelection ? colors.accent : colors.surfaceRaised,
                               height: node.radius * 2,
                               left: node.x - node.radius,
                               opacity: node.dimmed ? 0.22 : 1,
                               top: node.y - node.radius,
                               transform: [{ scale: node.scale }],
                               width: node.radius * 2,
+                              zIndex: node.dragged ? 20 : node.selected ? 10 : 1,
                             },
                             node.selected && styles.networkNodeSelected,
                             node.connectedToSelection && styles.networkNodeConnected,
@@ -3070,7 +3171,7 @@ export default function CercleScreen() {
                               <Text style={styles.networkFavoriteBadgeLabel}>*</Text>
                             </View>
                           ) : null}
-                        </Pressable>
+                        </View>
                         <View
                           pointerEvents="none"
                           style={[
@@ -3099,7 +3200,7 @@ export default function CercleScreen() {
                 {displayPersonCategories.filter((category) => networkPeople.some((person) => person.category === category.id)).map((category) => (
                   <View key={category.id} style={styles.legendItem}>
                     <View style={[styles.legendDot, { backgroundColor: category.color }]} />
-                    <Text style={styles.legendLabel}>{category.label}</Text>
+                    <Text style={styles.legendLabel}>{getDisplayCategoryLabel(category)}</Text>
                   </View>
                 ))}
               </View>
@@ -3473,9 +3574,22 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) => StyleShe
     color: colors.white,
   },
   filterRow: {
+    alignItems: 'center',
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: spacing.sm,
+    paddingRight: spacing.lg,
+    paddingVertical: 2,
+  },
+  filterSummaryRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  filterSummaryLabel: {
+    color: colors.muted,
+    fontFamily: fonts.bodySemi,
+    fontSize: 12,
   },
   filterChip: {
     backgroundColor: colors.surface,

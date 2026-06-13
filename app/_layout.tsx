@@ -33,6 +33,24 @@ import { ThemeProvider, useTheme, useThemePreferences } from '../src/theme/theme
 import { fonts, radii, spacing } from '../src/theme/tokens';
 import { useAppFonts } from '../src/theme/use-app-fonts';
 
+type RelockDelay = 'never' | 'five' | 'minute' | string;
+
+function getRelockDelayMs(delay: RelockDelay) {
+  if (delay === 'never') {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (delay === 'five') {
+    return 5 * 60_000;
+  }
+
+  if (delay === 'minute') {
+    return 60_000;
+  }
+
+  return 0;
+}
+
 function getBiometricLabel(types: LocalAuthentication.AuthenticationType[]) {
   if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
     return 'Face ID';
@@ -46,7 +64,7 @@ function getBiometricLabel(types: LocalAuthentication.AuthenticationType[]) {
     return 'iris';
   }
 
-  return 'biometrie';
+  return 'biométrie';
 }
 
 function AppRuntime() {
@@ -56,22 +74,33 @@ function AppRuntime() {
     let active = true;
 
     void (async () => {
-      const [objectives, routines, people] = await Promise.all([
-        listObjectives(db),
-        listRoutines(db),
-        listPeople(db),
-      ]);
-      if (!active) {
-        return;
-      }
+      try {
+        const [objectives, routines, people] = await Promise.all([
+          listObjectives(db),
+          listRoutines(db),
+          listPeople(db),
+        ]);
+        if (!active) {
+          return;
+        }
 
-      await syncAllObjectiveDeadlineRemindersAsync(db, objectives);
-      await syncAllBirthdayRemindersAsync(db, people);
-      await syncRoutineNotificationsAsync({
-        routines,
-        requestPermission: false,
-      });
-      await runAutoBackupIfDueAsync(db);
+        await syncAllObjectiveDeadlineRemindersAsync(db, objectives);
+        if (!active) {
+          return;
+        }
+        await syncAllBirthdayRemindersAsync(db, people);
+        if (!active) {
+          return;
+        }
+        await syncRoutineNotificationsAsync({
+          routines,
+          requestPermission: false,
+        });
+        await runAutoBackupIfDueAsync(db);
+      } catch (error) {
+        // Les tâches de démarrage ne doivent jamais bloquer ni crasher l'app.
+        console.warn('[startup] Synchronisation différée échouée :', error);
+      }
     })();
 
     return () => {
@@ -86,35 +115,42 @@ function PinGate({ children }: { children: ReactNode }) {
   const { colors } = useTheme();
   const { preferences } = useThemePreferences();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
   const backgroundAtRef = useRef<number | null>(null);
+  const storedPinRef = useRef<string | null>(null);
+  const relockDelayRef = useRef(preferences.pinRelockDelay);
+  const autoPromptedRef = useRef(false);
+
   const [storedPin, setStoredPin] = useState<string | null>(null);
   const [pinReady, setPinReady] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [draftPin, setDraftPin] = useState('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlockBusy, setUnlockBusy] = useState(false);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [lockCountdown, setLockCountdown] = useState(0);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricBusy, setBiometricBusy] = useState(false);
-  const [biometricLabel, setBiometricLabel] = useState('biometrie');
+  const [biometricLabel, setBiometricLabel] = useState('biométrie');
   const [isInactive, setIsInactive] = useState(false);
+
+  // Refs synchronisées pour éviter de re-souscrire AppState et les
+  // listeners de sécurité à chaque changement de PIN ou de préférence.
+  useEffect(() => {
+    storedPinRef.current = storedPin;
+  }, [storedPin]);
+
+  useEffect(() => {
+    relockDelayRef.current = preferences.pinRelockDelay;
+  }, [preferences.pinRelockDelay]);
 
   useEffect(() => {
     let active = true;
 
-    const getDelayMs = () => {
-      if (preferences.pinRelockDelay === 'never') {
-        return Number.POSITIVE_INFINITY;
-      }
-
-      if (preferences.pinRelockDelay === 'five') {
-        return 5 * 60_000;
-      }
-
-      if (preferences.pinRelockDelay === 'minute') {
-        return 60_000;
-      }
-
-      return 0;
+    const relock = () => {
+      setUnlocked(false);
+      setDraftPin('');
+      setUnlockError(null);
     };
 
     const syncPin = async () => {
@@ -143,13 +179,11 @@ function PinGate({ children }: { children: ReactNode }) {
     });
 
     const unsubscribeLock = subscribeToLockRequests(() => {
-      if (!active || !storedPin) {
+      if (!active || !storedPinRef.current) {
         return;
       }
 
-      setUnlocked(false);
-      setDraftPin('');
-      setUnlockError(null);
+      relock();
     });
 
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
@@ -158,27 +192,24 @@ function PinGate({ children }: { children: ReactNode }) {
       }
 
       setIsInactive(nextState !== 'active');
+      const delayMs = getRelockDelayMs(relockDelayRef.current);
 
       if (nextState === 'active') {
         void syncPin();
         const backgroundAt = backgroundAtRef.current;
         backgroundAtRef.current = null;
 
-        if (storedPin && backgroundAt !== null && Date.now() - backgroundAt >= getDelayMs()) {
-          setUnlocked(false);
-          setDraftPin('');
-          setUnlockError(null);
+        if (storedPinRef.current && backgroundAt !== null && Date.now() - backgroundAt >= delayMs) {
+          relock();
         }
         return;
       }
 
-      if (storedPin) {
+      if (storedPinRef.current) {
         backgroundAtRef.current = Date.now();
 
-        if (getDelayMs() === 0) {
-          setUnlocked(false);
-          setDraftPin('');
-          setUnlockError(null);
+        if (delayMs === 0) {
+          relock();
         }
       }
     });
@@ -189,7 +220,7 @@ function PinGate({ children }: { children: ReactNode }) {
       unsubscribeLock();
       appStateSubscription.remove();
     };
-  }, [preferences.pinRelockDelay, storedPin]);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -197,7 +228,7 @@ function PinGate({ children }: { children: ReactNode }) {
     void (async () => {
       if (!storedPin) {
         setBiometricAvailable(false);
-        setBiometricLabel('biometrie');
+        setBiometricLabel('biométrie');
         return;
       }
 
@@ -220,14 +251,44 @@ function PinGate({ children }: { children: ReactNode }) {
     };
   }, [storedPin]);
 
+  // Compte à rebours live pendant un verrouillage temporaire (trop d'essais).
+  useEffect(() => {
+    if (!lockedUntil) {
+      return;
+    }
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+      setLockCountdown(remaining);
+
+      if (remaining <= 0) {
+        setLockedUntil(null);
+        setUnlockError(null);
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1_000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [lockedUntil]);
+
+  const inputDisabled = unlockBusy || Boolean(lockedUntil);
+
   const handleUnlock = async () => {
     if (!storedPin) {
       setUnlocked(true);
       return;
     }
 
-    if (!/^\d{4,8}$/.test(draftPin) || unlockBusy) {
-      setUnlockError('Entre un PIN de 4 a 8 chiffres.');
+    if (inputDisabled) {
+      return;
+    }
+
+    if (!/^\d{4,8}$/.test(draftPin)) {
+      setUnlockError('Entre un PIN de 4 à 8 chiffres.');
       return;
     }
 
@@ -237,7 +298,7 @@ function PinGate({ children }: { children: ReactNode }) {
       result = await verifyPinAsync(draftPin);
     } catch {
       setUnlockBusy(false);
-      setUnlockError('Verification impossible pour le moment.');
+      setUnlockError('Vérification impossible pour le moment.');
       return;
     }
     setUnlockBusy(false);
@@ -246,12 +307,13 @@ function PinGate({ children }: { children: ReactNode }) {
       setUnlocked(true);
       setDraftPin('');
       setUnlockError(null);
+      setLockedUntil(null);
       return;
     }
 
     if (result.wiped) {
       await wipeAllDataAsync();
-      setUnlockError('Sécurité : Données effacées après trop d\'échecs.');
+      setUnlockError('Sécurité : données effacées après trop d\u2019échecs.');
       setStoredPin(null);
       setUnlocked(true);
       return;
@@ -259,7 +321,8 @@ function PinGate({ children }: { children: ReactNode }) {
 
     const remainingLockMs = result.lockedUntil - Date.now();
     if (remainingLockMs > 0) {
-      setUnlockError(`Trop d essais. Reessaie dans ${Math.ceil(remainingLockMs / 1000)} s.`);
+      setLockedUntil(result.lockedUntil);
+      setUnlockError(null);
     } else {
       setUnlockError('PIN incorrect.');
     }
@@ -288,6 +351,7 @@ function PinGate({ children }: { children: ReactNode }) {
         setUnlocked(true);
         setDraftPin('');
         setUnlockError(null);
+        setLockedUntil(null);
       } else if (result.error !== 'user_cancel' && result.error !== 'app_cancel' && result.error !== 'system_cancel') {
         const errorMsg = result.error === 'not_enrolled' ? 'Aucune biométrie enregistrée.' : 'Erreur biométrique.';
         setUnlockError(`${errorMsg} Utilise le PIN.`);
@@ -301,17 +365,30 @@ function PinGate({ children }: { children: ReactNode }) {
 
   const isLocked = pinReady && Boolean(storedPin) && !unlocked;
 
+  // Prompt biométrique automatique : une seule fois par session de verrouillage,
+  // et jamais pendant que l'app est en arrière-plan (le prompt système échouerait).
   useEffect(() => {
-    if (isLocked && preferences.useBiometrics && biometricAvailable && !biometricBusy) {
+    if (!isLocked) {
+      autoPromptedRef.current = false;
+      return;
+    }
+
+    if (isInactive || autoPromptedRef.current) {
+      return;
+    }
+
+    if (preferences.useBiometrics && biometricAvailable && !biometricBusy) {
+      autoPromptedRef.current = true;
       void handleBiometricUnlock();
     }
-  }, [isLocked, preferences.useBiometrics, biometricAvailable]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLocked, isInactive, preferences.useBiometrics, biometricAvailable, biometricBusy]);
 
   return (
     <View style={styles.gateRoot}>
       {children}
       {isInactive && (
-        <View style={[styles.lockOverlay, { zIndex: 9999 }]}>
+        <View style={[styles.lockOverlay, styles.privacyOverlay]}>
           <Text style={styles.lockTitle}>Carnet</Text>
         </View>
       )}
@@ -319,16 +396,18 @@ function PinGate({ children }: { children: ReactNode }) {
         <View style={styles.lockOverlay}>
           <View style={styles.lockCard}>
             <Text style={styles.lockKicker}>Verrou local</Text>
-            <Text style={styles.lockTitle}>Carnet verrouille</Text>
+            <Text style={styles.lockTitle}>Carnet verrouillé</Text>
             <Text style={styles.lockBody}>
-              {!pinReady ? 'Lecture du PIN stocke...' : 'Entre le code PIN pour rouvrir l app.'}
+              {!pinReady ? 'Lecture du PIN stocké…' : 'Entre le code PIN pour rouvrir l\u2019app.'}
             </Text>
             {!pinReady ? (
               <SkeletonScreen compact rows={2} />
             ) : (
               <>
                 <TextInput
+                  accessibilityLabel="Code PIN"
                   autoFocus
+                  editable={!inputDisabled}
                   keyboardType="number-pad"
                   maxLength={8}
                   onChangeText={(value) => {
@@ -340,26 +419,46 @@ function PinGate({ children }: { children: ReactNode }) {
                   onSubmitEditing={() => {
                     void handleUnlock();
                   }}
-                  placeholder="4 a 8 chiffres"
+                  placeholder="4 à 8 chiffres"
                   placeholderTextColor={colors.muted}
                   secureTextEntry
                   style={styles.lockInput}
                   value={draftPin}
                 />
-                {unlockError ? <Text style={styles.lockError}>{unlockError}</Text> : null}
+                {lockedUntil ? (
+                  <Text style={styles.lockError}>
+                    {`Trop d\u2019essais. Réessaie dans ${lockCountdown} s.`}
+                  </Text>
+                ) : unlockError ? (
+                  <Text style={styles.lockError}>{unlockError}</Text>
+                ) : null}
                 {biometricAvailable && preferences.useBiometrics && (
                   <Pressable
+                    accessibilityRole="button"
                     disabled={biometricBusy}
                     onPress={handleBiometricUnlock}
-                    style={styles.biometricButton}
+                    style={({ pressed }) => [
+                      styles.biometricButton,
+                      (pressed || biometricBusy) && styles.buttonDimmed,
+                    ]}
                   >
                     <Text style={styles.biometricButtonLabel}>
-                      {biometricBusy ? 'Ouverture...' : `Ouvrir avec ${biometricLabel}`}
+                      {biometricBusy ? 'Ouverture…' : `Ouvrir avec ${biometricLabel}`}
                     </Text>
                   </Pressable>
                 )}
-                <Pressable onPress={() => void handleUnlock()} style={styles.unlockButton}>
-                  <Text style={styles.unlockButtonLabel}>{unlockBusy ? 'Verification...' : 'Debloquer'}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={inputDisabled}
+                  onPress={() => void handleUnlock()}
+                  style={({ pressed }) => [
+                    styles.unlockButton,
+                    (pressed || inputDisabled) && styles.buttonDimmed,
+                  ]}
+                >
+                  <Text style={styles.unlockButtonLabel}>
+                    {unlockBusy ? 'Vérification…' : 'Débloquer'}
+                  </Text>
                 </Pressable>
               </>
             )}
@@ -426,14 +525,39 @@ function AppFrame() {
   );
 }
 
-const queryClient = new QueryClient();
+// Écran de chargement aux couleurs du thème, pour éviter le flash clair
+// au démarrage quand le thème sombre est actif.
+function ThemedLoadingScreen() {
+  const { colors } = useTheme();
+
+  return (
+    <View style={[loadingStyles.loadingScreen, { backgroundColor: colors.background }]}>
+      <SkeletonScreen rows={4} />
+    </View>
+  );
+}
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Données 100 % locales (SQLite) : pas de refetch réseau pertinent.
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 export default function RootLayout() {
   const [fontsLoaded, fontsError] = useAppFonts();
 
-  if (fontsError) {
-    throw fontsError;
-  }
+  useEffect(() => {
+    if (fontsError) {
+      // On continue avec les polices système plutôt que de crasher l'app.
+      console.warn('[fonts] Chargement des polices échoué :', fontsError);
+    }
+  }, [fontsError]);
+
+  const fontsReady = fontsLoaded || Boolean(fontsError);
 
   return (
     <GestureHandlerRootView style={loadingStyles.root}>
@@ -441,13 +565,7 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <ThemeProvider>
             <QueryClientProvider client={queryClient}>
-              {!fontsLoaded ? (
-                <View style={loadingStyles.loadingScreen}>
-                  <SkeletonScreen rows={4} />
-                </View>
-              ) : (
-                <AppFrame />
-              )}
+              {!fontsReady ? <ThemedLoadingScreen /> : <AppFrame />}
             </QueryClientProvider>
           </ThemeProvider>
         </SafeAreaProvider>
@@ -467,6 +585,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       backgroundColor: colors.background,
       justifyContent: 'center',
       padding: spacing.lg,
+    },
+    privacyOverlay: {
+      zIndex: 9999,
     },
     lockCard: {
       backgroundColor: colors.surface,
@@ -533,16 +654,13 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       borderRadius: radii.pill,
       paddingVertical: spacing.md,
     },
+    buttonDimmed: {
+      opacity: 0.6,
+    },
     unlockButtonLabel: {
       color: colors.white,
       fontFamily: fonts.bodyBold,
       fontSize: 15,
-    },
-    loadingScreen: {
-      alignItems: 'center',
-      backgroundColor: colors.background,
-      flex: 1,
-      justifyContent: 'center',
     },
   });
 
@@ -552,7 +670,6 @@ const loadingStyles = StyleSheet.create({
   },
   loadingScreen: {
     alignItems: 'center',
-    backgroundColor: '#f3e3cf',
     flex: 1,
     justifyContent: 'center',
   },
